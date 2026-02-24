@@ -16,7 +16,7 @@ st.title("🏆 Plataforma de Inteligencia Deportiva - TYM")
 
 HISTORICO_FILE = "historico_tym.csv"
 
-# --- UTILIDADES DE TIEMPO ---
+# --- UTILIDADES DE TIEMPO (BLINDADO) ---
 def to_mins(t_str):
     if pd.isna(t_str) or '--:--' in t_str or not t_str: return 0
     h, m = 0, 0
@@ -31,7 +31,7 @@ def to_hhmmss(mins):
     m = int(mins % 60)
     return f"{h:02d}:{m:02d}:00"
 
-# --- MOTOR DE COMENTARIOS ---
+# --- MOTOR DE COMENTARIOS (BLINDADO) ---
 def generar_comentario(row, df_contexto, categoria, pos):
     nombre = row['Deportista']
     if categoria in ['Completos', 'General']:
@@ -95,35 +95,36 @@ def aplicar_estilo(parrafo, size, negrita=False, center=False):
     run.bold = negrita
     if center: parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-def crear_tabla_optimizada(doc, df, cols):
+def crear_tabla_centrada(doc, df, cols):
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Light Grid Accent 1'
+    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
     table.autofit = False
     
-    # Anchos de columna específicos para evitar desbordamiento
-    anchos = {'#': 0.4, 'Deportista': 2.8, 'Tiempo Total': 0.8, 'Actividades': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.6}
+    anchos = {'#': 0.3, 'Deportista': 3.0, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.5}
 
     for i, col_name in enumerate(cols):
         cell = table.rows[0].cells[i]
         cell.text = col_name
         cell.width = Inches(anchos.get(col_name, 0.7))
-        aplicar_estilo(cell.paragraphs[0], 9, True)
+        aplicar_estilo(cell.paragraphs[0], 9, True, True)
 
     for _, row in df.iterrows():
         row_cells = table.add_row().cells
         for i, col_name in enumerate(cols):
+            # Aseguramos que no se pegue el nombre de la columna en los datos
             row_cells[i].text = str(row[col_name])
             row_cells[i].width = Inches(anchos.get(col_name, 0.7))
-            aplicar_estilo(row_cells[i].paragraphs[0], 9)
+            aplicar_estilo(row_cells[i].paragraphs[0], 9, False, True if col_name != 'Deportista' else False)
     
     doc.add_paragraph()
 
 def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
     
-    # Cabecera
+    # Titulo Principal Fuente 20
     h0 = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0)
-    aplicar_estilo(h0, 15, True, True)
+    aplicar_estilo(h0, 20, True, True)
     doc.add_paragraph()
     
     p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
@@ -141,21 +142,24 @@ def generar_word(df, sem, dist_p, larg_p):
     p_res = doc.add_paragraph(res_text)
     aplicar_estilo(p_res, 11)
 
-    # Gráfico
+    # Gráfico Centrado
     fig, ax = plt.subplots(figsize=(4,4))
     ax.pie([df['N_Mins'].sum(), df['B_Mins'].sum(), df['R_Mins'].sum()], labels=['Nat', 'Bici', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
     img_s = io.BytesIO()
-    plt.savefig(img_s, format='png')
-    doc.add_paragraph().add_run().add_picture(img_s, width=Inches(3))
+    plt.savefig(img_s, format='png', bbox_inches='tight')
     plt.close(fig)
+    
+    p_img = doc.add_paragraph()
+    p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_img.add_run().add_picture(img_s, width=Inches(3.5))
 
     # TOP 5 COMPLETOS
     h2 = doc.add_heading('🏅 TOP 5 TRIATLETAS COMPLETOS', level=2)
     aplicar_estilo(h2, 15, True)
     doc.add_paragraph()
-    t5 = df_c.sort_values('T_Mins', ascending=False).head(5)
+    t5 = df_c.sort_values('T_Mins', ascending=False).head(5).copy()
     t5['#'] = range(1, 6)
-    crear_tabla_optimizada(doc, t5, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
+    crear_tabla_centrada(doc, t5, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
     
     s1 = doc.add_paragraph('Análisis Ejecutivo')
     aplicar_estilo(s1, 13, True)
@@ -170,9 +174,9 @@ def generar_word(df, sem, dist_p, larg_p):
     aplicar_estilo(h3, 15, True)
     doc.add_paragraph()
     df_c['CV_n'] = df_c['CV'].astype(float)
-    b5 = df_c.sort_values('CV_n').head(5)
+    b5 = df_c.sort_values('CV_n').head(5).copy()
     b5['#'] = range(1, 6)
-    crear_tabla_optimizada(doc, b5, ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote'])
+    crear_tabla_centrada(doc, b5, ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote'])
     
     s2 = doc.add_paragraph('Análisis de Simetría')
     aplicar_estilo(s2, 13, True)
@@ -187,9 +191,9 @@ def generar_word(df, sem, dist_p, larg_p):
     h4 = doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=1)
     aplicar_estilo(h4, 15, True)
     doc.add_paragraph()
-    t15 = df.sort_values('T_Mins', ascending=False).head(15)
+    t15 = df.sort_values('T_Mins', ascending=False).head(15).copy()
     t15['#'] = range(1, 16)
-    crear_tabla_optimizada(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
+    crear_tabla_centrada(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
     
     s3 = doc.add_paragraph('Análisis del Podio General')
     aplicar_estilo(s3, 13, True)
@@ -205,9 +209,9 @@ def generar_word(df, sem, dist_p, larg_p):
         hd = doc.add_heading(f'{icono} TOP 15 {disc}', level=1)
         aplicar_estilo(hd, 15, True)
         doc.add_paragraph()
-        d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15)
+        d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15).copy()
         d15['#'] = range(1, len(d15)+1)
-        crear_tabla_optimizada(doc, d15, ['#', 'Deportista', col, 'Tiempo Total'])
+        crear_tabla_centrada(doc, d15, ['#', 'Deportista', col, 'Tiempo Total'])
         
         sd = doc.add_paragraph('Análisis del Podio')
         aplicar_estilo(sd, 13, True)
@@ -242,8 +246,8 @@ def generar_word(df, sem, dist_p, larg_p):
 sem_ui = st.text_input("Semana:", "08")
 raw_ui = st.text_area("Datos Tiempo Total:")
 ocr_ui = st.text_area("Datos OCR Captura:")
-if st.button("Generar Reporte Optimizado"):
+if st.button("Generar Reporte TYM Profesional"):
     if raw_ui.strip() and ocr_ui.strip():
         df_res = parse_raw_data(raw_ui)
         dist_p, larg_p = parse_ocr_data(ocr_ui)
-        st.download_button("📄 DESCARGAR REPORTE", generar_word(df_res, sem_ui, dist_p, larg_p), f"Reporte_TYM_{sem_ui}.docx")
+        st.download_button("📄 DESCARGAR REPORTE PROFESIONAL", generar_word(df_res, sem_ui, dist_p, larg_p), f"Reporte_TYM_{sem_ui}.docx")
