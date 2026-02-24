@@ -4,25 +4,23 @@ import numpy as np
 import re
 import matplotlib.pyplot as plt
 import io
-import os
 import unicodedata
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (BLINDADO) ---
+# --- 1. CONFIGURACIÓN (BLINDADO) ---
 st.set_page_config(page_title="Plataforma TYM 2026", page_icon="🏆", layout="wide")
 st.title("🏆 Gestión de Reportes y Estadísticas - Club TYM")
 
-# --- 2. UTILIDADES DE TIEMPO (BLINDADO) ---
-def clean_string(text):
+# --- 2. UTILIDADES DE TIEMPO Y LIMPIEZA ---
+def clean_name(text):
     if not text: return ""
     text = str(text).strip().upper()
-    text = "".join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
-    return text
+    return "".join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
 
 def to_mins(t_str):
-    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00']: return 0
+    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00', 'NaN']: return 0
     try:
         t_str = str(t_str).strip()
         if ':' in t_str:
@@ -30,35 +28,26 @@ def to_mins(t_str):
             return int(parts[0]) * 60 + int(parts[1])
         hm = re.search(r'(\d+)h', t_str)
         mm = re.search(r'(\d+)min', t_str)
-        h = int(hm.group(1)) if hm else 0
-        m = int(mm.group(1)) if mm else 0
-        return h * 60 + m
+        return (int(hm.group(1)) if hm else 0) * 60 + (int(mm.group(1)) if mm else 0)
     except: return 0
 
 def to_hhmmss(mins):
-    h, m = int(mins // 60), int(mins % 60)
-    return f"{h:02d}:{m:02d}:00"
+    return f"{int(mins // 60):02d}:{int(mins % 60):02d}:00"
 
-# --- 3. MOTOR DE COMENTARIOS (BLINDADO) ---
-def generar_comentario(row, df_contexto, categoria, pos):
+# --- 3. MOTOR DE COMENTARIOS (FORMATO ORIGINAL) ---
+def generar_comentario(row, cat, pos):
     nombre = row['Deportista']
-    if categoria in ['Completos', 'General']:
-        if pos == 1: return f"Dominio absoluto de {nombre}. Se consolida en la cima del club con un volumen total envidiable, demostrando una preparación de élite y una disciplina inquebrantable."
-        elif pos == 2: return f"Una semana brillante para {nombre}. Se queda con la plata manteniendo una presión constante sobre el líder. Su solidez fue el motor que lo mantuvo arriba."
-        else: return f"{nombre} cierra el podio con un rendimiento muy equilibrado. Demuestra que para estar en el grupo de avanzada no se puede regalar nada."
-    if categoria == 'CV':
-        cv = row.get('CV', 0)
-        return f"¡El reloj suizo del club! {nombre} logra una simetría casi perfecta ({cv}), demostrando una planificación milimétrica de sus cargas y eficiencia técnica."
-    tiempo = row.get(categoria, "")
-    if categoria == 'Natación': return f"Fuerza pura en el agua. {nombre} registra {tiempo}, liderando el podio con técnica depurada."
-    if categoria == 'Bicicleta': return f"Potencia pura sobre ruedas. {nombre} devoró la ruta con {tiempo}, siendo el gran motor del equipo."
-    if categoria == 'Trote': return f"Resistencia inalcanzable. {nombre} domina el asfalto con {tiempo} y una fase de carrera soberbia."
-    return "Desempeño destacado."
+    if cat in ['Completos', 'General']:
+        if pos == 1: return f"Dominio absoluto de {nombre}. Se consolida en la cima con un volumen total envidiable, demostrando una preparación de élite."
+        if pos == 2: return f"Semana brillante para {nombre}. Presión constante sobre el líder y solidez en todas sus sesiones."
+        return f"{nombre} cierra el podio con regularidad, sumando minutos de calidad en las tres disciplinas."
+    if cat == 'CV':
+        return f"¡Reloj suizo! {nombre} logra una simetría de {row.get('CV', 0)}, demostrando un control total de sus cargas."
+    return f"Rendimiento destacado de {nombre} en {cat}, liderando el podio con técnica y consistencia."
 
-# --- 4. PARSER DE DATOS (BLINDADO) ---
+# --- 4. PARSER DE DATOS ---
 def parse_raw_data(raw_text):
     data = []
-    rank = 1
     raw_text = raw_text.replace('\xa0', ' ')
     for line in raw_text.strip().split('\n'):
         if not line or 'Deportista' in line: continue
@@ -66,62 +55,61 @@ def parse_raw_data(raw_text):
             times = re.findall(r'(\d+h\s*\d*min|\d+h|\d+min|--:--)', line)
             if not times: continue
             name = re.sub(r'^\d+\s*', '', line[:line.find(times[0])]).strip()
-            t_m = to_mins(times[0])
-            s_m = to_mins(times[1]) if len(times) > 1 else 0
-            b_m = to_mins(times[2]) if len(times) > 2 else 0
-            r_m = to_mins(times[3]) if len(times) > 3 else 0
+            t_m, s_m, b_m, r_m = to_mins(times[0]), to_mins(times[1] if len(times)>1 else 0), to_mins(times[2] if len(times)>2 else 0), to_mins(times[3] if len(times)>3 else 0)
             cv = "NC" if 0 in [s_m, b_m, r_m] else round(np.std([s_m, b_m, r_m])/np.mean([s_m, b_m, r_m]), 4)
-            data.append({'#': rank, 'Deportista': name, 'Tiempo Total': to_hhmmss(t_m), 'Natación': to_hhmmss(s_m), 'Bicicleta': to_hhmmss(b_m), 'Trote': to_hhmmss(r_m), 'CV': cv, 'T_Mins': t_m, 'N_Mins': s_m, 'B_Mins': b_m, 'R_Mins': r_m})
-            rank += 1
+            data.append({'Deportista': name, 'Tiempo Total': to_hhmmss(t_m), 'Natación': to_hhmmss(s_m), 'Bicicleta': to_hhmmss(b_m), 'Trote': to_hhmmss(r_m), 'CV': cv, 'T_Mins': t_m, 'N_Mins': s_m, 'B_Mins': b_m, 'R_Mins': r_m})
         except: pass
     return pd.DataFrame(data)
 
 def parse_ocr_data(ocr_text):
-    distancia_podio, larga_podio = [], []
+    dist, larg = [], []
     for line in ocr_text.strip().split('\n'):
-        parts = line.split(';')
-        if len(parts) >= 6:
-            distancia_podio.append({'nombre': parts[2].strip(), 'valor': parts[3].strip()})
-            larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
-    return distancia_podio[:3], larga_podio[:3]
+        p = line.split(';')
+        if len(p) >= 6:
+            dist.append({'nombre': p[2].strip(), 'valor': p[3].strip()})
+            larg.append({'nombre': p[4].strip(), 'valor': p[5].strip()})
+    return dist[:3], larg[:3]
 
-# --- 5. ACTUALIZADOR DE EXCEL (ESTRICTO Y SIN ERRORES) ---
+# --- 5. ACTUALIZADOR DE EXCEL MAESTRO (RECONSTRUIDO) ---
 def actualizar_excel_maestro(archivo_maestro, df_actual, num_sem):
     xls = pd.ExcelFile(archivo_maestro)
     output = io.BytesIO()
-    col_target = f"Sem {num_sem.strip()}"
+    col_nueva = f"Sem {num_sem.strip()}"
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for hoja in xls.sheet_names:
             df_h = pd.read_excel(xls, sheet_name=hoja)
             df_h = df_h.drop(columns=['Sem 51', 'Sem 52'], errors='ignore')
             
+            # Identificar columna de nombres
             col_key = next((c for c in df_h.columns if str(c).lower() in ['nombre', 'deportista']), df_h.columns[0])
             mapeo = {'Tiempo Total': 'Tiempo Total', 'Natación': 'Natación', 'Ciclismo': 'Bicicleta', 'Trote': 'Trote', 'CV': 'CV'}
             col_dato = mapeo.get(hoja)
             
-            if col_dato and col_target in df_h.columns:
+            if col_dato:
+                # Asegurar que la columna nueva existe
+                if col_nueva not in df_h.columns:
+                    df_h[col_nueva] = '00:00:00' if hoja != 'CV' else 'NC'
+                
                 df_upd = df_actual[['Deportista', col_dato]].copy()
-                df_upd['MatchKey'] = df_upd['Deportista'].apply(clean_string)
-                df_h['MatchKey'] = df_h[col_key].apply(clean_string)
+                df_upd['Match'] = df_upd['Deportista'].apply(clean_name)
+                df_h['Match'] = df_h[col_key].apply(clean_name)
                 
-                updates = df_upd.set_index('MatchKey')[col_dato].to_dict()
-                default_val = 'NC' if hoja == 'CV' else '00:00:00'
-                
-                # Sincronización: Si el atleta no existe en la semana, poner 00:00:00
-                df_h[col_target] = df_h['MatchKey'].map(updates).fillna(default_val)
-                df_h.drop(columns=['MatchKey'], inplace=True)
+                updates = df_upd.set_index('Match')[col_dato].to_dict()
+                # Solo actualiza la columna de la semana, manteniendo el resto del historial intacto
+                df_h[col_nueva] = df_h['Match'].map(updates).fillna(df_h[col_nueva])
+                df_h.drop(columns=['Match'], inplace=True)
             
             df_h.to_excel(writer, sheet_name=hoja, index=False)
     return output.getvalue()
 
-# --- 6. GENERADOR DE WORD (CALIBRI - FORMATO OFICIAL BLINDADO) ---
+# --- 6. GENERADOR DE WORD (FORMATO PROFESIONAL BLINDADO) ---
 def aplicar_estilo(p, size, bold=False, center=False):
     run = p.runs[0] if p.runs else p.add_run()
     run.font.name = 'Calibri'; run.font.size = Pt(size); run.bold = bold
-    if center: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if center: p.alignment = 1
 
-def crear_tabla_centrada(doc, df, cols):
+def crear_tabla(doc, df, cols):
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Light Grid Accent 1'; table.alignment = 1; table.autofit = False
     anchos = {'#': 0.4, 'Deportista': 2.8, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.6}
@@ -129,7 +117,7 @@ def crear_tabla_centrada(doc, df, cols):
         cell = table.rows[0].cells[i]; cell.text = c
         cell.width = Inches(anchos.get(c, 0.7))
         aplicar_estilo(cell.paragraphs[0], 9, True, True)
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         row_cells = table.add_row().cells
         for i, c in enumerate(cols):
             row_cells[i].text = str(row[c])
@@ -149,30 +137,26 @@ def generar_word(df, sem, dist_p, larg_p):
     # Resumen (15)
     h1 = doc.add_heading('🔍 Resumen General', level=2); aplicar_estilo(h1, 15, True); doc.add_paragraph()
     df_c = df[df['CV'] != 'NC'].copy(); t_m = df['T_Mins'].sum()
-    p_res = doc.add_paragraph(f"Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}"); aplicar_estilo(p_res, 11)
+    p_res = doc.add_paragraph(f"Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {to_hhmmss(t_m)}"); aplicar_estilo(p_res, 11)
     
-    # Gráfico Centrado
     fig, ax = plt.subplots(figsize=(4,4))
     ax.pie([df['N_Mins'].sum(), df['B_Mins'].sum(), df['R_Mins'].sum()], labels=['Nat', 'Bici', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
     img_s = io.BytesIO(); plt.savefig(img_s, format='png', bbox_inches='tight'); plt.close(fig)
     p_img = doc.add_paragraph(); p_img.alignment = 1; p_img.add_run().add_picture(img_s, width=Inches(3.5))
 
-    # Top 5
-    for tit, d, cat in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_c.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_c.sort_values('CV').head(5), 'CV')]:
+    # Podios Top 5
+    for tit, d, cat in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_c.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_c.sort_values('CV', ascending=True).head(5), 'CV')]:
         h = doc.add_heading(tit, level=2); aplicar_estilo(h, 15, True); doc.add_paragraph()
-        d['#'] = range(1, 6); crear_tabla_centrada(doc, d, ['#', 'Deportista', 'Tiempo Total' if cat=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
+        d = d.copy(); d['#'] = range(1, len(d)+1)
+        crear_tabla(doc, d, ['#', 'Deportista', 'Tiempo Total' if cat=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
         h_an = doc.add_paragraph('Análisis:'); aplicar_estilo(h_an, 13, True)
-        for i, r in d.iterrows():
-            doc.add_paragraph(f"{r['#']}. {r['Deportista']}"); aplicar_estilo(doc.paragraphs[-1], 11, True)
-            doc.add_paragraph(generar_comentario(r, d, cat, r['#']))
+        for _, r in d.iterrows(): doc.add_paragraph(f"{r['#']}. {generar_comentario(r, cat, r['#'])}")
 
-    # Top 15 General y Disciplinas
+    # Top 15 por Disciplina
     for tit, icono, m_col, col_t in [('TIEMPO GENERAL', '🥇', 'T_Mins', 'Tiempo Total'), ('NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación'), ('CICLISMO', '🚴', 'B_Mins', 'Bicicleta'), ('TROTE', '🏃‍♂️', 'R_Mins', 'Trote')]:
         doc.add_page_break(); h = doc.add_heading(f'{icono} TOP 15 {tit}', level=1); aplicar_estilo(h, 15, True); doc.add_paragraph()
-        d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15); d15['#'] = range(1, len(d15)+1)
-        crear_tabla_centrada(doc, d15, ['#', 'Deportista', col_t, 'Tiempo Total'] if tit != 'TIEMPO GENERAL' else ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
-        h_pod = doc.add_paragraph('Análisis del Podio:'); aplicar_estilo(h_pod, 13, True)
-        for _, r in d15.head(3).iterrows(): doc.add_paragraph(generar_comentario(r, d15, col_t if col_t != 'Tiempo Total' else 'General', r['#']))
+        d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15).copy(); d15['#'] = range(1, len(d15)+1)
+        crear_tabla(doc, d15, ['#', 'Deportista', col_t, 'Tiempo Total'] if tit != 'TIEMPO GENERAL' else ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
 
     # Final OCR
     doc.add_page_break()
@@ -185,19 +169,17 @@ def generar_word(df, sem, dist_p, larg_p):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0); return buf
 
 # --- 7. INTERFAZ ---
-st.sidebar.header("📁 Archivos de Origen")
+st.sidebar.header("📁 Gestión Histórica")
 archivo_maestro = st.sidebar.file_uploader("Subir Archivo 00 Estadísticas (Excel)", type=["xlsx"])
-sem_num = st.text_input("Número de Semana a procesar (Ej: 08):", "08")
-raw_data = st.text_area("1. Datos de Tiempo Total:")
-ocr_input = st.text_area("2. Datos OCR (Traducción Captura):")
+sem_num = st.text_input("Semana a procesar (Ej: 08):", "08")
+raw_data = st.text_area("1. Datos Tiempo Total:")
+ocr_input = st.text_area("2. Datos OCR (Captura):")
 
-if st.button("🚀 PROCESAR Y GENERAR REPORTE"):
+if st.button("🚀 PROCESAR JORNADA"):
     if raw_data.strip() and ocr_input.strip() and archivo_maestro:
-        df_semana = parse_raw_data(raw_data)
+        df_sem = parse_raw_data(raw_data)
         dist_p, larg_p = parse_ocr_data(ocr_input)
-        st.success("¡Semana procesada con éxito!")
+        st.success("¡Datos procesados! Revisa los archivos abajo.")
         col1, col2 = st.columns(2)
-        col1.download_button("📄 DESCARGAR WORD (Calibri)", generar_word(df_semana, sem_num, dist_p, larg_p), f"Reporte_TYM_Sem_{sem_num}.docx")
-        col2.download_button("📊 DESCARGAR EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_semana, sem_num), "00_Estadisticas_TYM_Actualizado.xlsx")
-    else:
-        st.error("Error: Debes subir el Excel Maestro y completar ambos cuadros de datos.")
+        col1.download_button("📄 REPORTE WORD (Calibri)", generar_word(df_sem, sem_num, dist_p, larg_p), f"Reporte_TYM_{sem_num}.docx")
+        col2.download_button("📊 EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_sem, sem_num), "00_Estadisticas_Actualizado.xlsx")
