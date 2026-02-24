@@ -13,12 +13,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 st.set_page_config(page_title="Plataforma TYM", page_icon="🏆", layout="wide")
 st.title("🏆 Gestión de Reportes y Estadísticas - Club TYM")
 
-# --- 2. UTILIDADES DE TIEMPO ---
+# --- 2. UTILIDADES DE TIEMPO (BLINDADO) ---
 def to_mins(t_str):
-    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '']: return 0
+    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00']: return 0
     try:
         if ':' in str(t_str):
             parts = str(t_str).split(':')
+            if len(parts) == 3: # HH:MM:SS
+                return int(parts[0]) * 60 + int(parts[1])
             return int(parts[0]) * 60 + int(parts[1])
         hm = re.search(r'(\d+)h', str(t_str))
         mm = re.search(r'(\d+)min', str(t_str))
@@ -31,7 +33,7 @@ def to_hhmmss(mins):
     h, m = int(mins // 60), int(mins % 60)
     return f"{h:02d}:{m:02d}:00"
 
-# --- 3. COMENTARIOS INTELIGENTES ---
+# --- 3. MOTOR DE COMENTARIOS (BLINDADO) ---
 def generar_comentario(row, df_contexto, categoria, pos):
     nombre = row['Deportista']
     if categoria in ['Completos', 'General']:
@@ -43,7 +45,7 @@ def generar_comentario(row, df_contexto, categoria, pos):
         return f"¡Reloj suizo! {nombre} logra una simetría de {cv}, demostrando un control total de sus cargas de entrenamiento."
     return f"Rendimiento destacado de {nombre} en {categoria}, liderando el podio con técnica y consistencia."
 
-# --- 4. PARSER DE DATOS ---
+# --- 4. PARSER DE DATOS (BLINDADO) ---
 def parse_raw_data(raw_text):
     data = []
     rank = 1
@@ -64,38 +66,49 @@ def parse_raw_data(raw_text):
         except: pass
     return pd.DataFrame(data)
 
+def parse_ocr_data(ocr_text):
+    distancia_podio, larga_podio = [], []
+    for line in ocr_text.strip().split('\n'):
+        parts = line.split(';')
+        if len(parts) >= 6:
+            distancia_podio.append({'nombre': parts[2].strip(), 'valor': parts[3].strip()})
+            larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
+    return distancia_podio[:3], larga_podio[:3]
+
 # --- 5. ACTUALIZADOR DE EXCEL (REPARADO Y BLINDADO) ---
 def actualizar_excel_maestro(archivo_maestro, df_actual, num_sem):
     xls = pd.ExcelFile(archivo_maestro)
     output = io.BytesIO()
-    col_nueva = f"Sem {num_sem.strip()}"
+    col_target = f"Sem {num_sem.strip()}"
     
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         for hoja in xls.sheet_names:
             df_h = pd.read_excel(xls, sheet_name=hoja)
-            # Eliminar columnas basura si existen
-            if 'Sem 51' in df_h.columns: df_h.drop(columns=['Sem 51'], inplace=True, errors='ignore')
-            if 'Sem 52' in df_h.columns: df_h.drop(columns=['Sem 52'], inplace=True, errors='ignore')
+            df_h = df_h.drop(columns=['Sem 51', 'Sem 52'], errors='ignore')
             
-            col_key = next((c for c in df_h.columns if str(c).lower() in ['nombre', 'deportista']), df_h.columns[0])
+            # Identificación de columna clave (Posición 1 generalmente)
+            col_key = next((c for c in df_h.columns if str(c).lower() in ['nombre', 'deportista', 'posicion']), df_h.columns[1])
+            
             mapeo = {'Tiempo Total': 'Tiempo Total', 'Natación': 'Natación', 'Ciclismo': 'Bicicleta', 'Trote': 'Trote', 'CV': 'CV'}
             col_dato = mapeo.get(hoja)
             
-            if col_dato and col_nueva in df_h.columns:
+            if col_dato and col_target in df_h.columns:
                 df_upd = df_actual[['Deportista', col_dato]].copy()
-                df_upd['Key'] = df_upd['Deportista'].str.strip().str.upper()
-                df_h['Key'] = df_h[col_key].astype(str).str.strip().str.upper()
+                # Llave de cruce limpia
+                df_upd['MatchKey'] = df_upd['Deportista'].str.upper().str.strip()
+                df_h['MatchKey'] = df_h[col_key].astype(str).str.upper().str.strip()
                 
                 for idx, row in df_h.iterrows():
-                    match = df_upd[df_upd['Key'] == row['Key']]
+                    match = df_upd[df_upd['MatchKey'] == row['MatchKey']]
                     if not match.empty:
-                        df_h.at[idx, col_nueva] = match.iloc[0][col_dato]
-                df_h.drop(columns=['Key'], inplace=True)
+                        df_h.at[idx, col_target] = match.iloc[0][col_dato]
+                
+                df_h.drop(columns=['MatchKey'], inplace=True)
             
             df_h.to_excel(writer, sheet_name=hoja, index=False)
     return output.getvalue()
 
-# --- 6. GENERADOR DE WORD (CALIBRI 20/15/13/11) ---
+# --- 6. GENERADOR DE WORD (CALIBRI - BLINDADO) ---
 def aplicar_estilo(p, size, bold=False, center=False):
     run = p.runs[0] if p.runs else p.add_run()
     run.font.name = 'Calibri'; run.font.size = Pt(size); run.bold = bold
@@ -114,15 +127,18 @@ def crear_tabla(doc, df, cols):
             row_cells[i].text = str(row[c]); aplicar_estilo(row_cells[i].paragraphs[0], 9, False, c != 'Deportista')
     doc.add_paragraph()
 
-def generar_word(df, sem):
+def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
-    # Título Principal
+    # Título (20)
     t = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0)
     aplicar_estilo(t, 20, True, True); doc.add_paragraph()
     
-    # Resumen y Gráfico
+    p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
+    aplicar_estilo(p_intro, 11, True, True); doc.add_paragraph()
+
+    # Resumen (15)
     h1 = doc.add_heading('🔍 Resumen General', level=2); aplicar_estilo(h1, 15, True); doc.add_paragraph()
-    df_c = df[df['CV'] != 'NC'].copy()
+    df_c = df[df['CV'] != 'NC'].copy(); t_m = df['T_Mins'].sum()
     p_res = doc.add_paragraph(f"Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}"); aplicar_estilo(p_res, 11)
     
     fig, ax = plt.subplots(figsize=(4,4))
@@ -134,26 +150,41 @@ def generar_word(df, sem):
     for tit, d, cat in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_c.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_c.sort_values('CV').head(5), 'CV')]:
         h = doc.add_heading(tit, level=2); aplicar_estilo(h, 15, True); doc.add_paragraph()
         d['#'] = range(1, 6); crear_tabla(doc, d, ['#', 'Deportista', 'Tiempo Total' if cat=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
-        doc.add_paragraph('Análisis:'); [doc.add_paragraph(generar_comentario(r, d, cat, r['#'])) for _, r in d.iterrows()]
+        h_an = doc.add_paragraph('Análisis:'); aplicar_estilo(h_an, 13, True)
+        [doc.add_paragraph(generar_comentario(r, d, cat, r['#'])) for _, r in d.iterrows()]
 
-    # Disciplinas Top 15
+    # Top 15 General y Disciplinas
     for tit, icono, m_col, col_t in [('TIEMPO GENERAL', '🥇', 'T_Mins', 'Tiempo Total'), ('NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación'), ('CICLISMO', '🚴', 'B_Mins', 'Bicicleta'), ('TROTE', '🏃‍♂️', 'R_Mins', 'Trote')]:
         doc.add_page_break(); h = doc.add_heading(f'{icono} TOP 15 {tit}', level=1); aplicar_estilo(h, 15, True); doc.add_paragraph()
         d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15); d15['#'] = range(1, len(d15)+1)
         crear_tabla(doc, d15, ['#', 'Deportista', col_t, 'Tiempo Total'] if tit != 'TIEMPO GENERAL' else ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
+        h_an_d = doc.add_paragraph('Análisis del Podio:'); aplicar_estilo(h_an_d, 13, True)
+        for _, r in d15.head(3).iterrows(): doc.add_paragraph(generar_comentario(r, d15, col_t if col_t != 'Tiempo Total' else 'General', r['#']))
+
+    # Final Podios OCR
+    doc.add_page_break()
+    h5 = doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_estilo(h5, 15, True); doc.add_paragraph()
+    for i, p in enumerate(dist_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
+    doc.add_paragraph()
+    h6 = doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1); aplicar_estilo(h6, 15, True); doc.add_paragraph()
+    for i, p in enumerate(larg_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
 
     buf = io.BytesIO(); doc.save(buf); buf.seek(0); return buf
 
 # --- 7. INTERFAZ ---
 st.sidebar.header("📁 Archivo Maestro")
 archivo_maestro = st.sidebar.file_uploader("00 Estadísticas TYM (xlsx)", type=["xlsx"])
-sem_num = st.text_input("Semana a procesar:", "08")
-raw_data = st.text_area("Datos de Tiempo Total:")
+sem_num = st.text_input("Número de Semana a procesar (Ej: 08):", "08")
+raw_data = st.text_area("1. Pegar Datos de Tiempo Total:")
+ocr_input = st.text_area("2. Pegar Datos OCR (Traducción Captura):")
 
-if st.button("🚀 PROCESAR SEMANA"):
-    if raw_data.strip() and archivo_maestro:
+if st.button("🚀 PROCESAR Y GENERAR REPORTE"):
+    if raw_data.strip() and ocr_input.strip() and archivo_maestro:
         df_semana = parse_raw_data(raw_data)
-        st.success("¡Semana procesada!")
+        dist_p, larg_p = parse_ocr_data(ocr_input)
+        st.success("¡Semana procesada con éxito!")
         col1, col2 = st.columns(2)
-        col1.download_button("📄 DESCARGAR WORD", generar_word(df_semana, sem_num), f"Reporte_TYM_{sem_num}.docx")
-        col2.download_button("📊 EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_semana, sem_num), "00_Estadisticas_TYM_Actualizado.xlsx")
+        col1.download_button("📄 DESCARGAR WORD (Calibri)", generar_word(df_semana, sem_num, dist_p, larg_p), f"Reporte_TYM_Sem_{sem_num}.docx")
+        col2.download_button("📊 DESCARGAR EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_semana, sem_num), "00_Estadisticas_TYM_Actualizado.xlsx")
+    else:
+        st.error("Error: Debes subir el Excel Maestro y completar ambos cuadros de datos.")
