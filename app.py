@@ -5,6 +5,7 @@ import re
 import matplotlib.pyplot as plt
 import io
 import unicodedata
+from datetime import time
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -13,15 +14,17 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 st.set_page_config(page_title="Plataforma TYM 2026", page_icon="🏆", layout="wide")
 st.title("🏆 Gestión de Reportes y Estadísticas - Club TYM")
 
-# --- 2. UTILIDADES DE TIEMPO Y LIMPIEZA ---
+# --- 2. UTILIDADES DE TIEMPO Y LIMPIEZA (BLINDADO) ---
 def clean_name(text):
     if not text: return ""
     text = str(text).strip().upper()
     return "".join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
 
 def to_mins(t_str):
-    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00']: return 0
+    if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00', '0:00:00']: return 0
     try:
+        if isinstance(t_str, time):
+            return t_str.hour * 60 + t_str.minute
         t_str = str(t_str).strip()
         if ':' in t_str:
             parts = t_str.split(':')
@@ -71,11 +74,15 @@ def parse_ocr_data(ocr_text):
     for line in ocr_text.strip().split('\n'):
         p = line.split(';')
         if len(p) >= 6:
-            dist.append({'nombre': p[2].strip(), 'valor': p[3].strip()})
-            larg.append({'nombre': p[4].strip(), 'valor': p[5].strip()})
+            n_d, v_d = p[2].strip(), p[3].strip()
+            n_l, v_l = p[4].strip(), p[5].strip()
+            # Filtrar encabezados
+            if "Nombre" in n_d or "Distancia" in n_d or "Actividad" in n_l: continue
+            if n_d: dist.append({'nombre': n_d, 'valor': v_d})
+            if n_l: larg.append({'nombre': n_l, 'valor': v_l})
     return dist[:3], larg[:3]
 
-# --- 5. ACTUALIZADOR DE EXCEL MAESTRO ---
+# --- 5. ACTUALIZADOR DE EXCEL MAESTRO (BLINDADO Y VALIDADO) ---
 def actualizar_excel_maestro(archivo_maestro, df_actual, num_sem):
     xls = pd.ExcelFile(archivo_maestro)
     output = io.BytesIO()
@@ -89,23 +96,28 @@ def actualizar_excel_maestro(archivo_maestro, df_actual, num_sem):
             mapeo = {'Tiempo Total': 'Tiempo Total', 'Natación': 'Natación', 'Ciclismo': 'Bicicleta', 'Trote': 'Trote', 'CV': 'CV'}
             col_dato = mapeo.get(hoja)
             
-            if col_dato and col_target in df_h.columns:
+            if col_dato:
+                if col_target not in df_h.columns:
+                    df_h[col_target] = '00:00:00' if hoja != 'CV' else 'NC'
+                
                 df_upd = df_actual[['Deportista', col_dato]].copy()
                 df_upd['Match'] = df_upd['Deportista'].apply(clean_name)
                 df_h['Match'] = df_h[col_key].astype(str).apply(clean_name)
                 updates = df_upd.set_index('Match')[col_dato].to_dict()
                 default_val = 'NC' if hoja == 'CV' else '00:00:00'
-                df_h[col_target] = df_h['Match'].map(updates).fillna(default_val)
+                
+                df_h[col_target] = df_h['Match'].map(updates).fillna(df_h[col_target])
+                df_h[col_target] = df_h[col_target].replace([np.nan, '0', 0, ''], default_val)
                 df_h.drop(columns=['Match'], inplace=True)
             
             df_h.to_excel(writer, sheet_name=hoja, index=False)
     return output.getvalue()
 
-# --- 6. GENERADOR DE WORD (ESTILO TYM BLINDADO) ---
+# --- 6. GENERADOR DE WORD (CALIBRI 20/15/13/11 CENTRADO) ---
 def aplicar_estilo(p, size, bold=False, center=False):
     run = p.runs[0] if p.runs else p.add_run()
     run.font.name = 'Calibri'; run.font.size = Pt(size); run.bold = bold
-    if center: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if center: p.alignment = 1
 
 def crear_tabla_centrada(doc, df, cols):
     table = doc.add_table(rows=1, cols=len(cols))
@@ -118,8 +130,7 @@ def crear_tabla_centrada(doc, df, cols):
     for _, row in df.iterrows():
         row_cells = table.add_row().cells
         for i, c in enumerate(cols):
-            row_cells[i].text = str(row[c])
-            row_cells[i].width = Inches(anchos.get(c, 0.7))
+            row_cells[i].text = str(row[c]); row_cells[i].width = Inches(anchos.get(c, 0.7))
             aplicar_estilo(row_cells[i].paragraphs[0], 9, False, c != 'Deportista')
     doc.add_paragraph()
 
@@ -127,7 +138,6 @@ def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
     t = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0)
     aplicar_estilo(t, 20, True, True); doc.add_paragraph()
-    
     p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
     aplicar_estilo(p_intro, 11, True, True); doc.add_paragraph()
 
@@ -140,7 +150,7 @@ def generar_word(df, sem, dist_p, larg_p):
     img_s = io.BytesIO(); plt.savefig(img_s, format='png', bbox_inches='tight'); plt.close(fig)
     p_img = doc.add_paragraph(); p_img.alignment = 1; p_img.add_run().add_picture(img_s, width=Inches(3.5))
 
-    for tit, d, cat in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_c.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_c.sort_values('CV').head(5), 'CV')]:
+    for tit, d, cat in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_c.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_c.sort_values('CV', ascending=True).head(5), 'CV')]:
         h = doc.add_heading(tit, level=2); aplicar_estilo(h, 15, True); doc.add_paragraph()
         d = d.copy(); d['#'] = range(1, len(d)+1)
         crear_tabla_centrada(doc, d, ['#', 'Deportista', 'Tiempo Total' if cat=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
@@ -167,17 +177,17 @@ def generar_word(df, sem, dist_p, larg_p):
 
     buf = io.BytesIO(); doc.save(buf); buf.seek(0); return buf
 
-# --- 7. UI ---
+# --- 7. INTERFAZ ---
 archivo_maestro = st.sidebar.file_uploader("Subir Archivo 00 Estadísticas (Excel)", type=["xlsx"])
 sem_num = st.text_input("Número de Semana a procesar:", "08")
 raw_data = st.text_area("1. Datos de Tiempo Total:")
 ocr_input = st.text_area("2. Datos OCR (Traducción Captura):")
 
-if st.button("🚀 PROCESAR Y GENERAR REPORTE"):
+if st.button("🚀 PROCESAR JORNADA"):
     if raw_data.strip() and ocr_input.strip() and archivo_maestro:
-        df_semana = parse_raw_data(raw_data)
+        df_sem = parse_raw_data(raw_data)
         dist_p, larg_p = parse_ocr_data(ocr_input)
         st.success("¡Semana procesada con éxito!")
         col1, col2 = st.columns(2)
-        col1.download_button("📄 DESCARGAR WORD", generar_word(df_semana, sem_num, dist_p, larg_p), f"Reporte_TYM_Sem_{sem_num}.docx")
-        col2.download_button("📊 EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_semana, sem_num), "00_Estadisticas_Actualizado.xlsx")
+        col1.download_button("📄 REPORTE WORD", generar_word(df_sem, sem_num, dist_p, larg_p), f"Reporte_TYM_Sem_{sem_num}.docx")
+        col2.download_button("📊 EXCEL ACTUALIZADO", actualizar_excel_maestro(archivo_maestro, df_sem, sem_num), "00_Estadisticas_Actualizado.xlsx")
