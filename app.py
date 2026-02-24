@@ -12,11 +12,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Inteligencia TYM", page_icon="🏆", layout="wide")
 
-st.title("🏆 Generador Oficial de Reportes - TYM")
+st.title("🏆 Plataforma de Inteligencia Deportiva - TYM")
+st.markdown("Generación automatizada de reportes con formato oficial y memoria histórica.")
 
 HISTORICO_FILE = "historico_tym.csv"
 
-# --- FUNCIONES DE TIEMPO ---
+# --- UTILIDADES DE TIEMPO (BLINDADO) ---
 def to_mins(t_str):
     if pd.isna(t_str) or '--:--' in t_str or not t_str: return 0
     h, m = 0, 0
@@ -31,38 +32,40 @@ def to_hhmmss(mins):
     m = int(mins % 60)
     return f"{h:02d}:{m:02d}:00"
 
-# --- MOTOR DE INTELIGENCIA DE COMENTARIOS ---
-def obtener_comentario(row, df_contexto, categoria, pos):
+# --- MOTOR DE COMENTARIOS INTELIGENTES (BLINDADO) ---
+def generar_comentario(row, df_contexto, categoria, pos):
     nombre = row['Deportista']
-    tiempo = row.get(categoria, row.get('Tiempo Total'))
     t_mins = row.get('T_Mins', 0)
     b_mins = row.get('B_Mins', 0)
     acts = row.get('Actividades', 0)
     
+    pct_bici = (b_mins / t_mins * 100) if t_mins > 0 else 0
+    
     if categoria == 'Completos':
         if pos == 1:
-            margen = t_mins - df_contexto.iloc[1]['T_Mins'] if len(df_contexto) > 1 else 0
-            res = f"Dominio absoluto. {nombre} se consolida en la cima "
-            res += f"con una ventaja de {int(margen//60)}h sobre su escolta. "
-            res += "Su constancia en las tres disciplinas fue la llave del éxito."
-            return res
-        return f"Sólida posición de {nombre}. Mantiene un volumen de {tiempo} que lo sitúa en la élite del club gracias a su disciplina diaria."
+            return f"Dominio absoluto de {nombre}. Se consolida en la cima del club con un volumen total envidiable. Su capacidad para sostener {acts} sesiones demuestra una preparación de élite y una disciplina inquebrantable."
+        elif pos == 2:
+            return f"Una semana brillante para {nombre}. Se queda con la plata general manteniendo una presión constante sobre el líder. Su solidez en el ciclismo ({row['Bicicleta']}) fue el motor que lo mantuvo arriba."
+        else:
+            return f"{nombre} cierra el podio con un rendimiento muy equilibrado. Demuestra que para estar en el Top 5 no se puede regalar nada, sumando minutos de calidad en las tres disciplinas."
 
     if categoria == 'CV':
         cv_val = float(row['CV'])
-        if pos == 1: return f"¡Récord de simetría! {nombre} logra un balance casi perfecto ({cv_val}), demostrando una planificación milimétrica en sus cargas."
-        return f"Equilibrio fantástico. {nombre} demuestra que la eficiencia es tan importante como el volumen, manteniendo sus disciplinas en perfecta armonía."
+        if pos == 1:
+            return f"¡El reloj suizo del club! {nombre} logra una simetría de {cv_val}, una cifra casi perfecta. Requiere una planificación quirúrgica y un control total de las cargas."
+        return f"Excelente balance para {nombre}. Mantiene sus disciplinas en una armonía poco común, progresando de forma integral sin sobrecargar una sola área."
 
+    tiempo = row.get(categoria, "")
     if categoria == 'Natación':
-        return f"Fuerza pura en el agua. {nombre} registra {tiempo}, liderando el podio con una técnica que marca la diferencia en el volumen acuático."
+        return f"Fuerza pura en el agua. {nombre} registra {tiempo}, liderando el podio con una técnica depurada. Sus hombros de acero dominan el volumen acuático con eficiencia."
     if categoria == 'Bicicleta':
-        return f"Potencia pura sobre ruedas. {nombre} devoró la ruta con {tiempo}, demostrando que es el gran motor del equipo en esta disciplina."
+        return f"Potencia pura sobre ruedas. {nombre} devoró la ruta con {tiempo}. Demuestra ser el gran motor del equipo en la carretera, manteniendo promedios que intimidan."
     if categoria == 'Trote':
-        return f"Resistencia inalcanzable. {nombre} domina el asfalto con {tiempo}, cerrando la semana con una fase de carrera soberbia."
+        return f"Resistencia inalcanzable. {nombre} domina la carrera a pie con {tiempo}. Su fase de carrera es soberbia, demostrando una resiliencia cardiovascular de otro planeta."
     
-    return "Desempeño destacado y consistente."
+    return "Desempeño destacado."
 
-# --- PARSER DE DATOS ---
+# --- PARSER DE DATOS (BLINDADO) ---
 def parse_raw_data(raw_text):
     parsed_data = []
     rank_counter = 1 
@@ -93,17 +96,21 @@ def parse_raw_data(raw_text):
         except: pass
     return pd.DataFrame(parsed_data)
 
-def procesar_historico(df, sem):
-    col = f"Sem {sem}"
-    df_n = df[['Deportista', 'T_Mins']].rename(columns={'Deportista': 'Nombre', 'T_Mins': col})
-    if os.path.exists(HISTORICO_FILE):
-        df_h = pd.read_csv(HISTORICO_FILE)
-        if col in df_h.columns: df_h = df_h.drop(columns=[col])
-        df_h = pd.merge(df_h, df_n, on='Nombre', how='outer').fillna(0)
-    else: df_h = df_n
-    df_h['Tiempo Acumulado'] = df_h[[c for c in df_h.columns if 'Sem' in c]].sum(axis=1)
-    df_h.to_csv(HISTORICO_FILE, index=False)
+# --- NUEVA FUNCIONALIDAD: PARSER DE CAPTURA (OCR) ---
+def parse_ocr_data(ocr_text):
+    distancia_podio = []
+    larga_podio = []
+    lines = ocr_text.strip().split('\n')
+    for line in lines:
+        parts = line.split(';')
+        if len(parts) >= 6:
+            # Captura Distancia Total (Nombre en índice 2, Km en índice 3)
+            distancia_podio.append({'nombre': parts[2].strip(), 'valor': parts[3].strip()})
+            # Captura Salida más Larga (Nombre en índice 4, Tiempo en índice 5)
+            larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
+    return distancia_podio[:3], larga_podio[:3]
 
+# --- WORD GENERATOR (ESTRUCTURA BLINDADA) ---
 def crear_tabla(doc, df, cols):
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Light Grid Accent 1'
@@ -112,7 +119,7 @@ def crear_tabla(doc, df, cols):
         row_cells = table.add_row().cells
         for i, c in enumerate(cols): row_cells[i].text = str(row[c])
 
-def generar_word(df, sem):
+def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
     doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0).alignment = 1
     doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"').alignment = 1
@@ -120,14 +127,13 @@ def generar_word(df, sem):
     df_c = df[df['CV'] != 'NC'].copy()
     df_c['CV_n'] = df_c['CV'].astype(float)
     
-    # Resumen e Imagen
     doc.add_heading('🔍 Resumen General', level=2)
     t_m = df['T_Mins'].sum()
     doc.add_paragraph(f'Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {int(t_m//60)}h {int(t_m%60)}m')
     
+    # Gráfico
     s_d = df['N_Mins'].sum() + df['B_Mins'].sum() + df['R_Mins'].sum()
     p_n, p_b, p_t = (df['N_Mins'].sum()/s_d*100), (df['B_Mins'].sum()/s_d*100), (df['R_Mins'].sum()/s_d*100)
-    
     fig, ax = plt.subplots(figsize=(4,4))
     ax.pie([p_n, p_b, p_t], labels=['Nat', 'Bici', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
     img_s = io.BytesIO()
@@ -142,7 +148,7 @@ def generar_word(df, sem):
     for i, r in t5.iterrows():
         doc.add_paragraph(f"{r['#']}. {r['Deportista']}").bold = True
         doc.add_paragraph(f"{r['Tiempo Total']} | {r['Actividades']} act. | {r['Bicicleta']} bici").italic = True
-        doc.add_paragraph(obtener_comentario(r, t5, 'Completos', r['#']))
+        doc.add_paragraph(generar_comentario(r, t5, 'Completos', r['#']))
 
     # TOP 5 BALANCEADOS
     doc.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
@@ -151,7 +157,7 @@ def generar_word(df, sem):
     crear_tabla(doc, b5, ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote'])
     for i, r in b5.iterrows():
         doc.add_paragraph(f"{r['#']}. {r['Deportista']} (CV: {r['CV']})").bold = True
-        doc.add_paragraph(obtener_comentario(r, b5, 'CV', r['#']))
+        doc.add_paragraph(generar_comentario(r, b5, 'CV', r['#']))
 
     # TOP 15 GENERAL
     doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=2)
@@ -159,17 +165,30 @@ def generar_word(df, sem):
     t15['#'] = range(1, 16)
     crear_tabla(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
 
-    # DISCIPLINAS (Una por página)
-    for disc, col, icono in [('NATACIÓN', 'Natación', '🏊‍♂️'), ('CICLISMO', 'Bicicleta', '🚴'), ('TROTE', 'Trote', '🏃‍♂️')]:
+    # OTRAS CATEGORÍAS (Llenado automático con OCR)
+    doc.add_heading('🌟 OTRAS CATEGORÍAS DESTACADAS', level=2)
+    doc.add_heading('🔄 MAYOR FRECUENCIA (ACTIVIDADES TOTALES)', level=3)
+    for i, r in df.sort_values('Actividades', ascending=False).head(3).iterrows():
+        doc.add_paragraph(f"{r['Deportista']} ({r['Actividades']} sesiones)")
+        
+    doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=3)
+    for i, p in enumerate(dist_p):
+        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
+
+    doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=3)
+    for i, p in enumerate(larg_p):
+        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
+
+    # DISCIPLINAS (Una por página - BLINDADO)
+    for disc, col, icono, m_col in [('NATACIÓN', 'Natación', '🏊‍♂️', 'N_Mins'), ('CICLISMO', 'Bicicleta', '🚴', 'B_Mins'), ('TROTE', 'Trote', '🏃‍♂️', 'R_Mins')]:
         doc.add_page_break()
         doc.add_heading(f'{icono} TOP 15 {disc}', level=1)
-        m_col = 'N_Mins' if 'NAT' in disc else 'B_Mins' if 'CIC' in disc else 'R_Mins'
         d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15)
         d15['#'] = range(1, len(d15)+1)
         crear_tabla(doc, d15, ['#', 'Deportista', col, 'Tiempo Total'])
         doc.add_heading('Análisis del Podio:', level=3)
         for i, r in d15.head(3).iterrows():
-            doc.add_paragraph(f"{'🥇' if r['#']==1 else '🥈' if r['#']==2 else '🥉'} {r['Deportista']} ({r[col]}): {obtener_comentario(r, d15, col, r['#'])}")
+            doc.add_paragraph(f"{'🥇' if r['#']==1 else '🥈' if r['#']==2 else '🥉'} {r['Deportista']} ({r[col]}): {generar_comentario(r, d15, col, r['#'])}")
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -177,10 +196,13 @@ def generar_word(df, sem):
     return buf
 
 # --- UI ---
-sem = st.text_input("Semana:", "08")
-raw = st.text_area("Datos:")
-if st.button("Generar Reporte"):
-    df = parse_raw_data(raw)
-    if not df.empty:
-        procesar_historico(df, sem)
-        st.download_button("📄 DESCARGAR REPORTE OFICIAL", generar_word(df, sem), f"Reporte_TYM_Sem_{sem}.docx")
+sem = st.text_input("Número de Semana:", "08")
+raw = st.text_area("1. Pega los datos de Tiempo Total:")
+ocr_input = st.text_area("2. Pega los datos traducidos de la Captura (OCR):")
+
+if st.button("Generar Reporte Final"):
+    if raw.strip() and ocr_input.strip():
+        df_semana = parse_raw_data(raw)
+        dist_p, larg_p = parse_ocr_data(ocr_input)
+        
+        st.download_button("📄 DESCARGAR REPORTE OFICIAL", generar_word(df_semana, sem, dist_p, larg_p), f"Reporte_TYM_Sem_{sem}.docx")
