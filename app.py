@@ -4,21 +4,27 @@ import numpy as np
 import re
 import plotly.express as px
 import io
+import os
 from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Generador de Reportes - TYM", page_icon="🏆", layout="wide")
+st.set_page_config(page_title="Reportes TYM", page_icon="🏆", layout="wide")
 
-st.title("🏆 Generador de Reportes Semanales - TYM Triatlón")
-st.markdown("Pega los datos de la semana para generar tablas, gráficos y el reporte en Word.")
+st.title("🏆 Plataforma de Reportes e Inteligencia - TYM")
+st.markdown("Procesa la semana, actualiza el histórico y genera el reporte profesional.")
 
-# --- FUNCIONES DE LIMPIEZA Y CÁLCULO ---
+# --- ARCHIVO HISTÓRICO LOCAL ---
+HISTORICO_FILE = "historico_tym.csv"
+
+# --- FUNCIONES DE TIEMPO ---
 def to_mins(t_str):
     if pd.isna(t_str) or '--:--' in t_str or not t_str: return 0
     h, m = 0, 0
-    hm = re.search(r'(\d+)h', t_str)
+    hm = re.search(r'(\d+)h', str(t_str))
     if hm: h = int(hm.group(1))
-    mm = re.search(r'(\d+)min', t_str)
+    mm = re.search(r'(\d+)min', str(t_str))
     if mm: m = int(mm.group(1))
     return h * 60 + m
 
@@ -27,16 +33,32 @@ def to_hhmmss(mins):
     m = int(mins % 60)
     return f"{h:02d}:{m:02d}:00"
 
+# --- GENERADOR DINÁMICO DE COMENTARIOS ---
+def generar_comentario(posicion, nombre, tiempo_str, disciplina):
+    horas = 0
+    if "h" in tiempo_str or ":" in tiempo_str:
+        if ":" in tiempo_str:
+            horas = int(tiempo_str.split(":")[0])
+        else:
+            horas = int(re.search(r'(\d+)h', tiempo_str).group(1)) if re.search(r'(\d+)h', tiempo_str) else 0
+
+    if posicion == 1:
+        if horas >= 10: return f'Oro indiscutido. Una bestialidad de volumen con {tiempo_str}. {nombre} domina la disciplina aplastando los pedales/kilómetros y consolidando su posición como especialista absoluto de la semana.'
+        else: return f'El primer lugar indiscutido de la semana. {nombre} marca el ritmo del equipo con {tiempo_str}, demostrando un nivel técnico y una constancia envidiable para llevarse el oro.'
+    elif posicion == 2:
+        return f'Plata muy sólida. {nombre} persigue la cima con {tiempo_str}, manteniendo una presión constante sobre el líder y asegurando puntos vitales en la clasificación general.'
+    elif posicion == 3:
+        return f'Bronce que vale oro. {nombre} cierra el podio de honor registrando {tiempo_str}, una demostración de resistencia pura que lo/la mete en la élite del club esta semana.'
+    return f'Gran desempeño registrando {tiempo_str}.'
+
+# --- LECTURA DE DATOS CRUDOS ---
 def parse_raw_data(raw_text):
     parsed_data = []
     rank_counter = 1 
-    
-    # Limpiamos espacios en blanco invisibles que vienen de la web
     raw_text = raw_text.replace('\xa0', ' ')
     
     for line in raw_text.strip().split('\n'):
         line = line.strip()
-        # Ignoramos líneas vacías o la cabecera
         if not line or 'Deportista' in line: continue
         
         try:
@@ -68,7 +90,6 @@ def parse_raw_data(raw_text):
                     sep = token_match.start()
                     unit = token_match.group(1)
                     combined_nums = after_total[:sep]
-                    
                     if unit == 'h':
                         swim_val = combined_nums[-1]
                         try: acts = int(combined_nums[:-1])
@@ -122,182 +143,175 @@ def parse_raw_data(raw_text):
             
     return pd.DataFrame(parsed_data)
 
-# --- GENERADOR DE WORD ---
+# --- ACTUALIZAR HISTÓRICO ---
+def procesar_historico(df_semana, num_semana):
+    col_semana = f"Sem {num_semana}"
+    df_nueva = df_semana[['Deportista', 'T_Mins']].copy()
+    df_nueva.rename(columns={'Deportista': 'Nombre', 'T_Mins': col_semana}, inplace=True)
+    
+    if os.path.exists(HISTORICO_FILE):
+        df_hist = pd.read_csv(HISTORICO_FILE)
+        # Unir datos
+        df_hist = pd.merge(df_hist, df_nueva, on='Nombre', how='outer')
+        df_hist[col_semana] = df_hist[col_semana].fillna(0)
+    else:
+        df_hist = df_nueva.copy()
+        df_hist['Tiempo Acumulado (Mins)'] = 0
+
+    # Recalcular acumulado total en minutos
+    cols_semanas = [c for c in df_hist.columns if c.startswith('Sem ')]
+    df_hist[cols_semanas] = df_hist[cols_semanas].fillna(0)
+    df_hist['Tiempo Acumulado (Mins)'] = df_hist[cols_semanas].sum(axis=1)
+    
+    # Formatear para exportación
+    df_hist['Tiempo Total Formateado'] = df_hist['Tiempo Acumulado (Mins)'].apply(to_hhmmss)
+    df_hist = df_hist.sort_values('Tiempo Acumulado (Mins)', ascending=False).reset_index(drop=True)
+    
+    df_hist.to_csv(HISTORICO_FILE, index=False)
+    return df_hist
+
+# --- GENERADOR DE WORD PROFESIONAL ---
+def crear_tabla_word(doc, df_datos, columnas, anchos=None):
+    table = doc.add_table(rows=1, cols=len(columnas))
+    table.style = 'Table Grid'
+    hdr_cells = table.rows[0].cells
+    for i, col_name in enumerate(columnas):
+        hdr_cells[i].text = col_name
+        hdr_cells[i].paragraphs[0].runs[0].bold = True
+        
+    for index, row in df_datos.iterrows():
+        row_cells = table.add_row().cells
+        for i, col_name in enumerate(columnas):
+            row_cells[i].text = str(row[col_name])
+    return table
+
 def generar_word(df, semana_num):
     doc = Document()
     
-    # --- TÍTULO PRINCIPAL ---
-    doc.add_heading(f'🏆 REPORTE SEMANAL CLUB TYM TRIATLÓN - SEMANA {semana_num}', 0)
-    doc.add_paragraph('"(Frase destacada de la semana)"')
-    doc.add_paragraph('Breve introducción o resumen general de la semana...')
+    # --- PÁGINA 1: RESUMEN GENERAL ---
+    titulo = doc.add_heading(f'🏆 REPORTE SEMANAL CLUB TYM TRIATLÓN - SEMANA {semana_num}', 0)
+    titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph('"(La semana de la disciplina y el volumen sostenido)"').alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph()
     
-    # --- CÁLCULOS GENERALES ---
     total_dep = len(df)
     df_comp = df[df['CV'] != 'NC'].copy()
     df_comp['CV_num'] = df_comp['CV'].astype(float)
     total_comp = len(df_comp)
     total_act = df['Actividades'].sum()
     
-    total_mins = df['T_Mins'].sum()
-    horas_totales = int(total_mins // 60)
-    mins_totales = int(total_mins % 60)
-    
-    t_nat = df['N_Mins'].sum()
-    t_bic = df['B_Mins'].sum()
-    t_tro = df['R_Mins'].sum()
-    suma_disc = t_nat + t_bic + t_tro
-    
-    pct_nat = (t_nat / suma_disc * 100) if suma_disc > 0 else 0
-    pct_bic = (t_bic / suma_disc * 100) if suma_disc > 0 else 0
-    pct_tro = (t_tro / suma_disc * 100) if suma_disc > 0 else 0
-    
-    # --- RESUMEN GENERAL ---
     doc.add_heading('🔍 Resumen General', level=2)
-    doc.add_paragraph(f'Total deportistas: {total_dep}')
-    doc.add_paragraph(f'Triatletas completos (CV válido): {total_comp}')
-    doc.add_paragraph(f'Horas totales acumuladas: {horas_totales} horas y {mins_totales} minutos')
-    doc.add_paragraph(f'Actividades registradas: {total_act} actividades')
-    doc.add_paragraph('Distribución aproximada:')
-    doc.add_paragraph(f'🏊‍♂️ Natación: {pct_nat:.1f}%', style='List Bullet')
-    doc.add_paragraph(f'🚴‍♂️ Ciclismo: {pct_bic:.1f}%', style='List Bullet')
-    doc.add_paragraph(f'🏃‍♂️ Trote: {pct_tro:.1f}%', style='List Bullet')
-
-    # --- TOP 15 COMPLETOS ---
+    doc.add_paragraph(f'Total deportistas activos: {total_dep}')
+    doc.add_paragraph(f'Triatletas completos (CV válido en las 3 disciplinas): {total_comp}')
+    doc.add_paragraph(f'Actividades registradas: {total_act} sesiones de entrenamiento')
+    
     doc.add_heading('🏅 TOP 15 TRIATLETAS COMPLETOS', level=2)
-    doc.add_paragraph('(Clasificación por tiempo total acumulado, filtrando estrictamente CV válido)')
+    top15 = df_comp.sort_values('T_Mins', ascending=False).head(15)
+    top15['Pos'] = range(1, len(top15) + 1)
+    crear_tabla_word(doc, top15, ['Pos', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
     
-    if not df_comp.empty:
-        top15 = df_comp.sort_values('T_Mins', ascending=False).head(15)
-        
-        table = doc.add_table(rows=1, cols=7)
-        table.style = 'Table Grid'
-        hdr_cells = table.rows[0].cells
-        encabezados = ['#', 'Deportista', 'Tiempo Total', 'Act.', 'Natación', 'Bicicleta', 'Carrera']
-        for i, header in enumerate(encabezados):
-            hdr_cells[i].text = header
-            
-        for i, row in top15.reset_index().iterrows():
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(i + 1)
-            row_cells[1].text = str(row['Deportista'])
-            row_cells[2].text = str(row['Tiempo Total'])
-            row_cells[3].text = str(row['Actividades'])
-            row_cells[4].text = str(row['Natación'])
-            row_cells[5].text = str(row['Bicicleta'])
-            row_cells[6].text = str(row['Trote'])
-            
-    doc.add_heading('Análisis Ejecutivo (El Podio)', level=3)
-    doc.add_paragraph('🥇 1. [Nombre] – "[Apodo o frase corta]"')
-    doc.add_paragraph('[Comentario entretenido del primer lugar...]')
-    doc.add_paragraph('🥈 2. [Nombre] – "[Apodo o frase corta]"')
-    doc.add_paragraph('[Comentario entretenido del segundo lugar...]')
-    doc.add_paragraph('🥉 3. [Nombre] – "[Apodo o frase corta]"')
-    doc.add_paragraph('[Comentario entretenido del tercer lugar...]')
-
-    # --- ATLETAS BALANCEADOS ---
-    doc.add_heading('⚖️ TOP 15 TRIATLETAS MÁS BALANCEADOS', level=2)
-    doc.add_paragraph('(Menor Coeficiente de Variación - La proporción perfecta entre disciplinas)')
+    doc.add_heading('⚖️ TOP 15 MÁS BALANCEADOS (CV)', level=2)
+    bal15 = df_comp.sort_values('CV_num', ascending=True).head(15)
+    bal15['Pos'] = range(1, len(bal15) + 1)
+    crear_tabla_word(doc, bal15, ['Pos', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote'])
     
-    if not df_comp.empty:
-        bal = df_comp.sort_values('CV_num', ascending=True).head(15)
-        table2 = doc.add_table(rows=1, cols=6)
-        table2.style = 'Table Grid'
-        hdr_cells2 = table2.rows[0].cells
-        encabezados2 = ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Carrera']
-        for i, header in enumerate(encabezados2):
-            hdr_cells2[i].text = header
-            
-        for i, row in bal.reset_index().iterrows():
-            row_cells2 = table2.add_row().cells
-            row_cells2[0].text = str(i + 1)
-            row_cells2[1].text = str(row['Deportista'])
-            row_cells2[2].text = str(row['CV'])
-            row_cells2[3].text = str(row['Natación'])
-            row_cells2[4].text = str(row['Bicicleta'])
-            row_cells2[5].text = str(row['Trote'])
-
-    doc.add_heading('Análisis breve del Podio de Simetría:', level=3)
-    doc.add_paragraph('🥇 1. [Nombre] ([CV]) – [Comentario entretenido sobre su balance]')
-    doc.add_paragraph('🥈 2. [Nombre] ([CV]) – [Comentario entretenido sobre su balance]')
-    doc.add_paragraph('🥉 3. [Nombre] ([CV]) – [Comentario entretenido sobre su balance]')
-
-    # --- PODIOS POR DISCIPLINA ---
-    def agregar_podio(titulo, icono, col_orden, formato_str):
-        doc.add_heading(f'{icono} {titulo}', level=2)
-        top3 = df.sort_values(col_orden, ascending=False).head(3)
-        for i, row in top3.reset_index().iterrows():
-            tiempo = row[formato_str]
-            doc.add_paragraph(f"{i+1}. {row['Deportista']} ({tiempo}) – [Comentario entretenido]")
-
-    doc.add_heading('🥇 PODIO TIEMPO TOTAL GENERAL (Incluyendo especialistas)', level=2)
-    top_general = df.sort_values('T_Mins', ascending=False).head(3)
-    for i, row in top_general.reset_index().iterrows():
-        doc.add_paragraph(f"{i+1}. {row['Deportista']} ({row['Tiempo Total']}) – [Comentario entretenido]")
-
-    agregar_podio('PODIO NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación')
-    agregar_podio('PODIO CICLISMO', '🚴', 'B_Mins', 'Bicicleta')
-    agregar_podio('PODIO TROTE', '🏃‍♂️', 'R_Mins', 'Trote')
-
-    # --- OTRAS CATEGORÍAS ---
-    doc.add_heading('🔄 MAYOR FRECUENCIA (ACTIVIDADES TOTALES)', level=2)
-    top_act = df.sort_values('Actividades', ascending=False).head(3)
-    for i, row in top_act.reset_index().iterrows():
-        doc.add_paragraph(f"{i+1}. {row['Deportista']} ({row['Actividades']} actividades) – [Comentario entretenido]")
-
-    doc.add_heading('📊 RESUMEN DE CAMBIOS Y CONCLUSIONES', level=2)
-    doc.add_paragraph('[Escribir comparativa con la semana anterior...]')
-
-    doc.add_heading('💡 INSIGHTS ESTRATÉGICOS', level=2)
-    doc.add_paragraph('[Escribir reflexiones finales...]')
+    # --- PÁGINA 2: NATACIÓN ---
+    doc.add_page_break()
+    doc.add_heading('🏊‍♂️ ANÁLISIS POR DISCIPLINA: NATACIÓN', level=1)
+    doc.add_paragraph('El podio de los atletas con mayor volumen en el agua durante esta semana.')
     
-    # Guardar en buffer
+    top_nat = df.sort_values('N_Mins', ascending=False).head(10)
+    top_nat['Pos'] = range(1, len(top_nat) + 1)
+    crear_tabla_word(doc, top_nat, ['Pos', 'Deportista', 'Natación', 'Tiempo Total'])
+    
+    doc.add_heading('Análisis del Podio:', level=3)
+    for i, row in top_nat.head(3).iterrows():
+        comentario = generar_comentario(row['Pos'], row['Deportista'], row['Natación'], 'Natación')
+        p = doc.add_paragraph()
+        p.add_run(f"🥇 {row['Deportista']} ({row['Natación']}): ").bold = True if row['Pos']==1 else False
+        p.add_run(f"🥈 {row['Deportista']} ({row['Natación']}): ").bold = True if row['Pos']==2 else False
+        p.add_run(f"🥉 {row['Deportista']} ({row['Natación']}): ").bold = True if row['Pos']==3 else False
+        p.add_run(comentario)
+
+    # --- PÁGINA 3: CICLISMO ---
+    doc.add_page_break()
+    doc.add_heading('🚴‍♂️ ANÁLISIS POR DISCIPLINA: CICLISMO', level=1)
+    doc.add_paragraph('El podio de los ruteros y rodadores que sumaron más horas de pedaleo.')
+    
+    top_bic = df.sort_values('B_Mins', ascending=False).head(10)
+    top_bic['Pos'] = range(1, len(top_bic) + 1)
+    crear_tabla_word(doc, top_bic, ['Pos', 'Deportista', 'Bicicleta', 'Tiempo Total'])
+    
+    doc.add_heading('Análisis del Podio:', level=3)
+    for i, row in top_bic.head(3).iterrows():
+        comentario = generar_comentario(row['Pos'], row['Deportista'], row['Bicicleta'], 'Bicicleta')
+        p = doc.add_paragraph()
+        if row['Pos']==1: p.add_run(f"🥇 {row['Deportista']} ({row['Bicicleta']}): ").bold = True
+        elif row['Pos']==2: p.add_run(f"🥈 {row['Deportista']} ({row['Bicicleta']}): ").bold = True
+        elif row['Pos']==3: p.add_run(f"🥉 {row['Deportista']} ({row['Bicicleta']}): ").bold = True
+        p.add_run(comentario)
+
+    # --- PÁGINA 4: TROTE ---
+    doc.add_page_break()
+    doc.add_heading('🏃‍♂️ ANÁLISIS POR DISCIPLINA: TROTE', level=1)
+    doc.add_paragraph('El ranking de los corredores con mayor resistencia en el asfalto.')
+    
+    top_tro = df.sort_values('R_Mins', ascending=False).head(10)
+    top_tro['Pos'] = range(1, len(top_tro) + 1)
+    crear_tabla_word(doc, top_tro, ['Pos', 'Deportista', 'Trote', 'Tiempo Total'])
+    
+    doc.add_heading('Análisis del Podio:', level=3)
+    for i, row in top_tro.head(3).iterrows():
+        comentario = generar_comentario(row['Pos'], row['Deportista'], row['Trote'], 'Trote')
+        p = doc.add_paragraph()
+        if row['Pos']==1: p.add_run(f"🥇 {row['Deportista']} ({row['Trote']}): ").bold = True
+        elif row['Pos']==2: p.add_run(f"🥈 {row['Deportista']} ({row['Trote']}): ").bold = True
+        elif row['Pos']==3: p.add_run(f"🥉 {row['Deportista']} ({row['Trote']}): ").bold = True
+        p.add_run(comentario)
+
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-# --- INTERFAZ WEB ---
-semana_input = st.text_input("Ingresa el número de semana (Ej: 08):", "08")
-datos_crudos = st.text_area("Pega aquí los datos de la semana (texto tal cual sale de tu plataforma):", height=200)
+# --- INTERFAZ WEB STREAMLIT ---
+with st.sidebar:
+    st.header("⚙️ Memoria Histórica")
+    st.write("La app guarda el histórico automáticamente.")
+    if os.path.exists(HISTORICO_FILE):
+        df_historico = pd.read_csv(HISTORICO_FILE)
+        st.success(f"Histórico activo: {len(df_historico)} atletas registrados.")
+        csv_hist = df_historico.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Descargar Base Histórica", data=csv_hist, file_name="Historial_Completo_TYM.csv", mime="text/csv")
+    else:
+        st.warning("No hay histórico guardado aún. Se creará al procesar la primera semana.")
 
-if st.button("Procesar Datos"):
+semana_input = st.text_input("Ingresa el número de semana (Ej: 08):", "08")
+datos_crudos = st.text_area("Pega los datos de la semana:", height=200)
+
+if st.button("Procesar Semana y Generar Reporte"):
     if datos_crudos.strip():
         df = parse_raw_data(datos_crudos)
         
         if not df.empty:
-            st.success("¡Datos procesados correctamente!")
+            st.success("¡Datos leídos! Actualizando memoria y generando documentos...")
             
-            # Gráfico de Distribución
-            st.subheader("📊 Distribución de Disciplinas")
-            total_n = df['N_Mins'].sum()
-            total_b = df['B_Mins'].sum()
-            total_r = df['R_Mins'].sum()
+            # Actualizar y guardar histórico
+            df_hist_actualizado = procesar_historico(df, semana_input)
             
-            fig = px.pie(
-                values=[total_n, total_b, total_r], 
-                names=['Natación', 'Ciclismo', 'Trote'],
-                color_discrete_sequence=['#1E90FF', '#32CD32', '#FF4500'],
-                hole=0.4
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Mostrar Resumen en Pantalla
+            st.subheader("📋 Vista Previa del Top 5 General")
+            st.dataframe(df[['Clasificación', 'Deportista', 'Tiempo Total', 'CV']].head(5))
             
-            # Tabla Principal (Mostramos el Top 15 Completo en la app también)
-            st.subheader("📋 Tabla General Estandarizada")
-            df_mostrar = df[['Clasificación', 'Deportista', 'Tiempo Total', 'Actividades', 'Natación', 'Bicicleta', 'Trote', 'CV']]
-            st.dataframe(df_mostrar)
-            
-            # Botones de Descarga
+            # Botones
             col1, col2 = st.columns(2)
-            
-            # Descargar CSV
-            csv = df_mostrar.to_csv(index=False).encode('utf-8')
-            col1.download_button("⬇️ Descargar Tabla (Excel/CSV)", data=csv, file_name=f"Semana_{semana_input}_TYM.csv", mime="text/csv")
-            
-            # Descargar Word
             word_file = generar_word(df, semana_input)
-            col2.download_button("⬇️ Descargar Reporte Base (Word)", data=word_file, file_name=f"Reporte_Semana_{semana_input}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            col1.download_button("📄 DESCARGAR REPORTE WORD", data=word_file, file_name=f"Reporte_Semana_{semana_input}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            
+            csv_semana = df.to_csv(index=False).encode('utf-8')
+            col2.download_button("📊 Descargar Datos de la Semana (CSV)", data=csv_semana, file_name=f"Datos_Semana_{semana_input}.csv", mime="text/csv")
             
         else:
-            st.error("No se pudieron leer los datos. Asegúrate de pegarlos con el formato habitual.")
+            st.error("No se detectaron datos válidos.")
     else:
         st.warning("Por favor, pega los datos primero.")
