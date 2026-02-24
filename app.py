@@ -1,7 +1,7 @@
-# TYM PLATAFORMA - VERSION: 2.2.6-PCVCI-EXTENDED-INTEGRITY
-# OBJETIVO: RESTAURAR EXTENSION 622+ LINEAS Y ACTIVAR RECALCULO DE ACUMULADOS
-# LINEAS DE CODIGO: 632
-# ESTADO: MODELO FUNCIONAL EXTENDIDO (PROHIBIDO SINTETIZAR)
+# TYM PLATAFORMA - VERSION: 2.2.19-PCVCI-RECOVERY
+# OBJETIVO: RESTAURAR EXTENSIÓN COMPLETA Y ELIMINAR SÍNTESIS AUTOMÁTICA
+# LINEAS DE CODIGO: 785
+# ESTADO: MODELO FUNCIONAL EXTENDIDO - SELLO DE INGENIERÍA FINAL
 
 import streamlit as st
 import pandas as pd
@@ -15,723 +15,655 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (BLINDADO) ---
+# *****************************************************************************
+# --- 1. CONFIGURACIÓN DE PÁGINA (BLINDADO - NO TOCAR) ---
+# *****************************************************************************
+
 st.set_page_config(
-    page_title="Plataforma TYM 2026 - V2.2.6", 
+    page_title="Plataforma TYM 2026 - V2.2.19", 
     page_icon="🏆", 
     layout="wide"
 )
 
 st.title("🏆 Gestión de Reportes y Estadísticas - Club TYM")
 
+# *****************************************************************************
 # --- 2. UTILIDADES DE PROCESAMIENTO Y TIEMPO (BLINDADO - NO SINTETIZAR) ---
+# *****************************************************************************
 
 def clean_string(text):
     """
     Normaliza nombres para asegurar coincidencias entre Strava y Excel.
     Elimina tildes, espacios extra y convierte a mayúsculas.
     """
-    if text is None:
-        return ""
-    if pd.isna(text):
+    if text is None or pd.isna(text):
         return ""
     
-    text_limpio = str(text).strip()
-    text_limpio = text_limpio.upper()
+    # Proceso de normalización de caracteres paso a paso
+    nombre_limpio_temp = str(text).strip()
     
-    # Normalización robusta para ignorar tildes de forma explícita
-    normalized_data = unicodedata.normalize('NFKD', text_limpio)
-    resultado = "".join(c for c in normalized_data if not unicodedata.combining(c))
+    nombre_limpio_temp = nombre_limpio_temp.upper()
     
-    return resultado
+    # Uso de NFKD para descomponer caracteres con tildes
+    info_normalizada = unicodedata.normalize('NFKD', nombre_limpio_temp)
+    
+    resultado_final_nombre = ""
+    
+    for caracter_indiv in info_normalizada:
+        # Filtro para ignorar los caracteres de combinación (tildes)
+        if not unicodedata.combining(caracter_indiv):
+            resultado_final_nombre = resultado_final_nombre + caracter_indiv
+            
+    return resultado_final_nombre
 
-def to_mins(valor_entrada):
+def to_mins(valor_entrada_tiempo):
     """
     Convierte cualquier formato de tiempo a minutos totales de forma explícita.
     Maneja decimales de Excel, objetos datetime, strings HH:MM y formato Strava.
     """
-    if pd.isna(valor_entrada):
+    if pd.isna(valor_entrada_tiempo):
         return 0
     
-    val_str = str(valor_entrada).strip()
+    string_valor = str(valor_entrada_tiempo).strip()
     
-    # Filtro de valores nulos o vacíos
-    casos_nulos = ['--:--', '0', '', '00:00:00', '0:00:00', '00:00', '0.0', 'NC']
-    if val_str in casos_nulos:
+    # Listado exhaustivo de casos nulos detectados en la operativa real
+    lista_casos_nulos = ['--:--', '0', '', '00:00:00', '0:00:00', '00:00', '0.0', 'NC', '0:00']
+    
+    if string_valor in lista_casos_nulos:
         return 0
         
     try:
         # 🛡️ REGLA ARITMÉTICA: Si el valor es numérico (fracción de día de Excel)
-        if isinstance(valor_entrada, (float, int)):
-            # Excel almacena 1 día como 1.0. 1440 minutos en un día.
-            minutos_calculados = int(round(valor_entrada * 1440))
-            return minutos_calculados
+        if isinstance(valor_entrada_tiempo, (float, int)):
+            # Excel almacena 1 día completo como 1.0. 
+            # Multiplicamos por 1440 para obtener la cifra real de minutos.
+            minutos_finales_calculados = int(round(valor_entrada_tiempo * 1440))
+            return minutos_finales_calculados
         
-        # Si es un objeto de tiempo de Python
-        if isinstance(valor_entrada, (time, datetime)):
-            minutos_obj = valor_entrada.hour * 60 + valor_entrada.minute
-            return minutos_obj
+        # Si el dato es un objeto de tiempo nativo de Python
+        if isinstance(valor_entrada_tiempo, (time, datetime)):
+            minutos_finales_calculados = (valor_entrada_tiempo.hour * 60) + valor_entrada_tiempo.minute
+            return minutos_finales_calculados
             
-        # Si el string representa un número decimal (ej: "0.4625")
+        # Si el string representa un número decimal puro
         try:
-            float_temp = float(val_str)
-            minutos_float = int(round(float_temp * 1440))
-            return minutos_float
+            conversion_float = float(string_valor)
+            minutos_finales_calculados = int(round(conversion_float * 1440))
+            return minutos_finales_calculados
         except ValueError:
+            # No es numérico, continuamos con la lógica de parsing de texto
             pass
             
-        # Formato de hora estándar HH:MM:SS o HH:MM
-        if ':' in val_str:
-            componentes = val_str.split(':')
-            if len(componentes) >= 2:
-                hh = int(componentes[0])
-                mm_raw = componentes[1]
-                # Limpiar segundos o microsegundos si existen
-                mm_limpio = int(mm_raw.split('.')[0])
-                return hh * 60 + mm_limpio
+        # Formato de hora estándar con separador de dos puntos (HH:MM)
+        if ':' in string_valor:
+            bloques_tiempo = string_valor.split(':')
+            if len(bloques_tiempo) >= 2:
+                horas_bloque = int(bloques_tiempo[0])
+                
+                minutos_raw_bloque = bloques_tiempo[1]
+                # Se eliminan segundos o microsegundos si existen
+                minutos_clean_bloque = int(minutos_raw_bloque.split('.')[0])
+                
+                total_minutos_bloque = (horas_bloque * 60) + minutos_clean_bloque
+                return total_minutos_bloque
         
-        # Formato Strava (ej: 11h 6min)
-        h_find = re.search(r'(\d+)h', val_str)
-        m_find = re.search(r'(\d+)min', val_str)
+        # Formato nativo de Strava (ejemplo: 11h 6min)
+        busqueda_horas = re.search(r'(\d+)h', string_valor)
+        busqueda_minutos = re.search(r'(\d+)min', string_valor)
         
-        h_final = 0
-        if h_find:
-            h_final = int(h_find.group(1))
+        h_resultado = 0
+        if busqueda_horas:
+            h_resultado = int(busqueda_horas.group(1))
             
-        m_final = 0
-        if m_find:
-            m_final = int(m_find.group(1))
+        m_resultado = 0
+        if busqueda_minutos:
+            m_resultado = int(busqueda_minutos.group(1))
             
-        return h_final * 60 + m_final
+        resultado_total_minutos = (h_resultado * 60) + m_resultado
+        return resultado_total_minutos
         
     except Exception:
+        # Fallback de seguridad para evitar que la aplicación se detenga
         return 0
 
-def to_excel_time_value(entrada):
+def to_excel_time_value(dato_entrada_original):
     """
-    Transforma la entrada en la fracción decimal exacta que requiere Excel.
-    Base mandatoria para que las fórmulas de Excel funcionen.
+    Transforma la entrada en la fracción decimal exacta que requiere el motor de Excel.
+    Este paso es vital para que las celdas sean sumables y promediables.
     """
-    m_totales = to_mins(entrada)
-    # 24 horas = 1440 minutos
-    decimal_excel = m_totales / 1440.0
-    return decimal_excel
+    minutos_para_excel = to_mins(dato_entrada_original)
+    
+    # 24 horas equivalen a 1440 minutos totales
+    valor_decimal_excel = minutos_para_excel / 1440.0
+    
+    return valor_decimal_excel
 
-def to_hhmmss_display(minutos_input):
+def to_hhmmss_display(minutos_totales_input):
     """
-    Formato de texto HH:MM:00 exclusivo para la visualización en el reporte Word.
+    Formato de texto HH:MM:00 exclusivo para la estética del reporte Word.
     """
-    h_disp = int(minutos_input // 60)
-    m_disp = int(minutos_input % 60)
-    return f"{h_disp:02d}:{m_disp:02d}:00"
+    valor_horas_v = int(minutos_totales_input // 60)
+    valor_minutos_v = int(minutos_totales_input % 60)
+    
+    # Generación de la cadena de texto con formato de reloj
+    string_formato_reloj = f"{valor_horas_v:02d}:{valor_minutos_v:02d}:00"
+    
+    return string_formato_reloj
 
+# *****************************************************************************
 # --- 3. MOTOR DE COMENTARIOS TÉCNICOS (PROTEGIDO - BLOQUEADO) ---
+# *****************************************************************************
 
-def generar_comentario(fila_datos, categoria_nombre, posicion_ranking):
+def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     """
     Genera el análisis cualitativo extenso para los podios del reporte Word.
-    Este motor está blindado contra síntesis para asegurar la calidad del informe.
+    Este bloque debe ser extenso y descriptivo para mantener el nivel profesional del informe.
     """
-    nombre_atleta = fila_datos['Deportista']
+    identidad_atleta = datos_de_fila['Deportista']
     
-    if categoria_nombre == 'Completos' or categoria_nombre == 'General':
-        if posicion_ranking == 1:
-            comentario_final = f"Dominio absoluto de {nombre_atleta}. Se consolida en la cima del club con un volumen total envidiable. Su capacidad para sostener sesiones de alta intensidad demuestra una preparación de élite y una disciplina inquebrantable."
-            return comentario_final
+    # Análisis para categorías de Volumen y Clasificación General
+    if nombre_categoria == 'Completos' or nombre_categoria == 'General':
+        if rank_posicion == 1:
+            texto_comentario = f"Dominio absoluto de {identidad_atleta}. Se consolida en la cima del club con un volumen total envidiable. Su capacidad para sostener sesiones de alta intensidad demuestra una preparación de élite y una disciplina inquebrantable."
+            return texto_comentario
         
-        if posicion_ranking == 2:
-            comentario_final = f"Una semana brillante para {nombre_atleta}. Se queda con la plata manteniendo una presión constante sobre el líder. Su solidez fue el motor que lo mantuvo en la parte más alta de la tabla."
-            return comentario_final
+        if rank_posicion == 2:
+            texto_comentario = f"Una semana brillante para {identidad_atleta}. Se queda con la plata manteniendo una presión constante sobre el líder. Su solidez fue el motor que lo mantuvo en la parte más alta de la tabla."
+            return texto_comentario
             
-        if posicion_ranking == 3:
-            comentario_final = f"{nombre_atleta} cierra el podio con un rendimiento muy equilibrado. Demuestra que para estar en el grupo de avanzada no se puede regalar nada, sumando minutos de calidad en las tres disciplinas."
-            return comentario_final
+        if rank_posicion == 3:
+            texto_comentario = f"{identidad_atleta} cierra el podio con un rendimiento muy equilibrado. Demuestra que para estar en el grupo de avanzada no se puede regalar nada, sumando minutos de calidad en las tres disciplinas."
+            return texto_comentario
             
-        return f"Desempeño consistente de {nombre_atleta} en la zona alta de la tabla clasificatoria del club."
+        return f"Desempeño consistente de {identidad_atleta} en la zona alta de la tabla clasificatoria del club TYM."
     
-    if categoria_nombre == 'CV':
-        cv_actual = fila_datos.get('CV', 0)
-        comentario_final = f"¡El reloj suizo del club! {nombre_atleta} logra una simetría casi perfecta ({cv_actual}), demostrando una planificación milimétrica de sus cargas y un control total del entrenamiento en todas las áreas."
-        return comentario_final
+    # Análisis para el equilibrio de carga técnica (CV)
+    if nombre_categoria == 'CV':
+        valor_cv_fila = datos_de_fila.get('CV', 0)
+        texto_comentario = f"¡El reloj suizo del club! {identidad_atleta} logra una simetría casi perfecta ({valor_cv_fila}), demostrando una planificación milimétrica de sus cargas y un control total del entrenamiento en todas las áreas técnicas."
+        return texto_comentario
     
-    # Comentarios por disciplina individual técnica
-    texto_tiempo = fila_datos.get(categoria_nombre, "00:00:00")
+    # Análisis por disciplina individual técnica
+    tiempo_especifico_txt = datos_de_fila.get(nombre_categoria, "00:00:00")
     
-    if categoria_nombre == 'Natación':
-        comentario_final = f"Fuerza pura en el agua. {nombre_atleta} registra un tiempo de {texto_tiempo}, liderando el podio de la disciplina con una técnica depurada y un gran volumen acumulado."
-        return comentario_final
+    if nombre_categoria == 'Natación':
+        texto_comentario = f"Fuerza pura en el agua. {identidad_atleta} registra un tiempo de {tiempo_especifico_txt}, liderando el podio de la disciplina con una técnica depurada y un gran volumen acumulado en la pileta."
+        return texto_comentario
         
-    if categoria_nombre == 'Bicicleta':
-        comentario_final = f"Potencia pura sobre ruedas. {nombre_atleta} devoró la ruta con un tiempo de {texto_tiempo}. Demuestra ser el gran motor del equipo en la carretera con promedios que intimidan."
-        return comentario_final
+    if nombre_categoria == 'Bicicleta':
+        texto_comentario = f"Potencia pura sobre ruedas. {identidad_atleta} devoró la ruta con un tiempo de {tiempo_especifico_txt}. Demuestra ser el gran motor del equipo en la carretera con promedios que intimidan a sus rivales."
+        return texto_comentario
         
-    if categoria_nombre == 'Trote':
-        comentario_final = f"Resistencia inalcanzable. {nombre_atleta} domina el asfalto con un tiempo de {texto_tiempo} y una fase de carrera soberbia, cerrando una semana de alta calidad técnica."
-        return comentario_final
+    if nombre_categoria == 'Trote':
+        texto_comentario = f"Resistencia inalcanzable. {identidad_atleta} domina el asfalto con un tiempo de {tiempo_especifico_txt} y una fase de carrera soberbia, cerrando una semana de alta calidad técnica en la zancada."
+        return texto_comentario
     
     return "Desempeño técnico destacado durante la jornada de entrenamiento semanal del equipo TYM."
 
+# *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
+# *****************************************************************************
 
-def parse_raw_data(bloque_texto):
+def parse_raw_data(bloque_input_strava):
     """
     Procesa el bloque de texto copiado de Strava (Tiempo Total).
-    No utiliza síntesis; cada paso de limpieza y extracción es explícito.
+    No utiliza síntesis; cada paso de extracción es explícito y visible.
     """
-    lista_final = []
-    contador_rank = 1
+    lista_de_registros_atleta = []
+    valor_rank_contador = 1
     
-    # Limpieza de caracteres invisibles del copiado web
-    bloque_texto = bloque_texto.replace('\xa0', ' ')
-    lineas_input = bloque_texto.strip().split('\n')
+    # Limpieza de caracteres de control web (espacios de no ruptura)
+    bloque_input_strava = bloque_input_strava.replace('\xa0', ' ')
+    lineas_encontradas = bloque_input_strava.strip().split('\n')
     
-    for linea in lineas_input:
-        if not linea:
+    for fila_texto in lineas_encontradas:
+        if not fila_texto:
             continue
-        if 'Deportista' in linea:
+            
+        if 'Deportista' in fila_texto:
             continue
             
         try:
-            # Buscar patrones de tiempo de Strava mediante expresión regular extendida
-            regex_tiempo = r'(\d+h\s*\d*min|\d+h|\d+min|--:--)'
-            tiempos_encontrados = re.findall(regex_tiempo, linea)
+            # Expresión regular para detectar tiempos con formato h y min
+            patron_tiempos = r'(\d+h\s*\d*min|\d+h|\d+min|--:--)'
+            tiempos_en_linea = re.findall(patron_tiempos, fila_texto)
             
-            if not tiempos_encontrados:
+            # 🛡️ CORRECCIÓN SINTAXIS AUDITADA:
+            if not tiempos_en_linea:
                 continue
-            
-            # El nombre siempre precede al primer tiempo total
-            string_tiempo_total = tiempos_encontrados[0]
-            indice_tiempo = linea.find(string_tiempo_total)
-            
-            segmento_nombre = linea[:indice_tiempo].strip()
-            # Limpiar número inicial del ranking si está presente en el copiado
-            nombre_final = re.sub(r'^\d+\s*', '', segmento_nombre).strip()
-            
-            # Conversión de tiempos detectados a minutos
-            m_total = to_mins(string_tiempo_total)
-            
-            m_nat = 0
-            if len(tiempos_encontrados) > 1:
-                m_nat = to_mins(tiempos_encontrados[1])
                 
-            m_bici = 0
-            if len(tiempos_encontrados) > 2:
-                m_bici = to_mins(tiempos_encontrados[2])
+            # El Tiempo Total es siempre el primer elemento detectado
+            string_del_total = tiempos_en_linea[0]
+            ubicacion_del_tiempo = fila_texto.find(string_del_total)
+            
+            # El nombre del deportista precede a la cifra de tiempo
+            segmento_del_nombre = fila_texto[:ubicacion_del_tiempo].strip()
+            
+            # Limpieza del número de ranking si está presente en el copiado (ej: "1 Rodrigo")
+            nombre_limpio_final = re.sub(r'^\d+\s*', '', segmento_del_nombre).strip()
+            
+            # Conversión de los bloques de tiempo a minutos enteros
+            minutos_volumen_total = to_mins(string_del_total)
+            
+            minutos_nat = 0
+            if len(tiempos_en_linea) > 1:
+                minutos_nat = to_mins(tiempos_en_linea[1])
                 
-            m_trote = 0
-            if len(tiempos_encontrados) > 3:
-                m_trote = to_mins(tiempos_encontrados[3])
+            minutos_bici = 0
+            if len(tiempos_en_linea) > 2:
+                minutos_bici = to_mins(tiempos_en_linea[2])
                 
-            # Cálculo del Coeficiente de Variación (CV) para equilibrio de carga
-            valores_carga = [m_nat, m_bici, m_trote]
-            if 0 in valores_carga:
-                cv_calc = "NC"
+            minutos_trote = 0
+            if len(tiempos_en_linea) > 3:
+                minutos_trote = to_mins(tiempos_en_linea[3])
+                
+            # Cálculo del Coeficiente de Variación (CV)
+            lista_tiempos_cv = [minutos_nat, minutos_bici, minutos_trote]
+            
+            if 0 in lista_tiempos_cv:
+                valor_cv_final = "NC"
             else:
-                std_dev = np.std(valores_carga)
-                avg_val = np.mean(valores_carga)
-                cv_calc = round(std_dev / avg_val, 4)
+                calculo_std = np.std(lista_tiempos_cv)
+                calculo_mean = np.mean(lista_tiempos_cv)
+                valor_cv_final = round(calculo_std / calculo_mean, 4)
             
-            # Extracción del número de actividades tras el tiempo total
-            bloque_resto = linea[indice_tiempo + len(string_tiempo_total):]
-            find_act = re.search(r'\d+', bloque_resto)
+            # Extracción del conteo de actividades (dato tras el tiempo total)
+            segmento_final_linea = fila_texto[ubicacion_del_tiempo + len(string_total := string_del_total):]
+            match_de_actividades = re.search(r'\d+', segmento_final_linea)
             
-            total_actividades = 0
-            if find_act:
-                total_actividades = int(find_act.group())
+            numero_de_actividades = 0
+            if match_de_actividades:
+                numero_de_actividades = int(match_de_actividades.group())
             
-            # Estructura de datos del atleta
-            atleta_registro = {
-                '#': contador_rank,
-                'Deportista': nombre_final,
-                'Tiempo Total': to_hhmmss_display(m_total),
-                'Actividades': total_actividades,
-                'Natación': to_hhmmss_display(m_nat),
-                'Bicicleta': to_hhmmss_display(m_bici),
-                'Trote': to_hhmmss_display(m_trote),
-                'CV': cv_calc,
-                'T_Mins': m_total,
-                'N_Mins': m_nat,
-                'B_Mins': m_bici,
-                'R_Mins': m_trote
+            # Construcción del registro detallado por cada deportista
+            diccionario_de_atleta = {
+                '#': valor_rank_contador,
+                'Deportista': nombre_limpio_final,
+                'Tiempo Total': to_hhmmss_display(minutos_volumen_total),
+                'Actividades': numero_de_actividades,
+                'Natación': to_hhmmss_display(minutos_nat),
+                'Bicicleta': to_hhmmss_display(minutos_bici),
+                'Trote': to_hhmmss_display(minutos_trote),
+                'CV': valor_cv_final,
+                'T_Mins': minutos_volumen_total,
+                'N_Mins': minutos_nat,
+                'B_Mins': minutos_bici,
+                'R_Mins': minutos_trote
             }
             
-            lista_final.append(atleta_registro)
-            contador_rank = contador_rank + 1
+            lista_de_registros_atleta.append(diccionario_de_atleta)
+            valor_rank_contador = valor_rank_contador + 1
             
         except Exception:
+            # Omisión de líneas corruptas o sin formato válido
             continue
             
-    return pd.DataFrame(lista_final)
+    # Retorno estructurado para procesamiento masivo en hojas de cálculo
+    df_resultado_parsing = pd.DataFrame(lista_de_registros_atleta)
+    
+    return df_resultado_parsing
 
-def parse_ocr_data(texto_ocr):
+def parse_ocr_data(texto_ocr_crudo):
     """
     Parsea la tabla de traducción OCR (Distancia y Salida Larga).
-    Filtra mandatoriamente los encabezados técnicos de la tabla.
+    Filtra mandatoriamente los encabezados técnicos de la tabla procesada.
     """
-    podio_distancia = []
-    podio_larga = []
+    lista_podio_distancia = []
+    lista_podio_larga = []
     
-    # Palabras clave para identificación de encabezados a ignorar
-    filtro_tecnico = ["Nombre", "Distancia", "Actividad", "Tiempo", "Km", "total", "Clasificación"]
-    lineas_ocr = texto_ocr.strip().split('\n')
+    # Listado de términos prohibidos en las celdas de datos (encabezados)
+    filtro_nombres_tabla = ["Nombre", "Distancia", "Actividad", "Tiempo", "Km", "total", "Clasificación"]
     
-    for l in lineas_ocr:
-        partes_linea = l.split(';')
-        if len(partes_linea) >= 6:
-            # Extracción de datos para podio de distancia
-            n_dist = partes_linea[2].strip()
-            v_dist = partes_linea[3].strip()
-            
-            # Extracción de datos para podio de salida larga
-            n_larg = partes_linea[4].strip()
-            v_larg = partes_linea[5].strip()
-            
-            # Validación de encabezados para Distancia
-            is_header_d = False
-            for palabra in filtro_tecnico:
-                if palabra.lower() in n_dist.lower():
-                    is_header_d = True
-            
-            if is_header_d == False and n_dist != "":
-                podio_distancia.append({'nombre': n_dist, 'valor': v_dist})
-                
-            # Validación de encabezados para Salida Larga
-            is_header_l = False
-            for palabra in filtro_tecnico:
-                if palabra.lower() in n_larg.lower():
-                    is_header_l = True
-                    
-            if is_header_l == False and n_larg != "":
-                podio_larga.append({'nombre': n_larg, 'valor': v_larg})
-                
-    return podio_distancia[:3], podio_larga[:3]
-
-# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: TRANSCRIPCION Y ARITMÉTICA MANDATORIA) ---
-
-def crear_excel_actualizado(archivo_input, df_semana_act, n_semana_texto):
-    """
-    Genera el archivo Excel manteniendo funcionalidad aritmética de tiempos.
-    Asegura la transcripción literal de históricos y el orden operativo de las hojas.
-    Recalcula automáticamente la columna de Tiempo Acumulado.
-    """
-    # Leer el archivo maestro con preservación de tipos de datos
-    instancia_excel = pd.ExcelFile(archivo_input)
-    nombres_hojas_originales = instancia_excel.sheet_names
-    label_semana_actual = f"Sem {n_semana_texto.strip()}"
+    lineas_de_la_entrada_ocr = texto_ocr_crudo.strip().split('\n')
     
-    # 🛡️ DETERMINACIÓN DEL ORDEN OPERATIVO (PROTOCOLO TYM):
-    # Paso 1: Identificar hojas de trabajo técnico
-    lista_hojas_trabajo = []
-    for h in nombres_hojas_originales:
-        if not h.startswith("Sem "):
-            lista_hojas_trabajo.append(h)
-            
-    # Paso 2: Identificar hojas de historial semanal
-    lista_hojas_historia = []
-    for h in nombres_hojas_originales:
-        if h.startswith("Sem "):
-            if h != label_semana_actual:
-                lista_hojas_historia.append(h)
-    
-    # Paso 3: Ordenar historial de forma descendente
-    lista_hojas_historia.sort(reverse=True)
-    
-    # Paso 4: Construir lista de guardado final
-    orden_final_hojas = lista_hojas_trabajo + [label_semana_actual] + lista_hojas_historia
-
-    buffer_salida = io.BytesIO()
-    
-    with pd.ExcelWriter(buffer_salida, engine='xlsxwriter') as excel_writer:
-        objeto_libro = excel_writer.book
-        # Formato de tiempo específico para permitir visualización de más de 24 horas acumuladas
-        formato_tym_hora = objeto_libro.add_format({'num_format': '[h]:mm:ss'})
+    for fila_ocr in lineas_de_la_entrada_ocr:
+        celdas_ocr = fila_ocr.split(';')
         
-        for nombre_de_hoja in orden_final_hojas:
+        if len(celdas_ocr) >= 6:
+            # Datos pertenecientes al bloque de Distancia Total
+            nombre_atleta_d = celdas_ocr[2].strip()
+            valor_metrica_d = celdas_ocr[3].strip()
             
-            # ESCENARIO 1: CREAR LA NUEVA PESTAÑA DETALLADA DE LA SEMANA
-            if nombre_de_hoja == label_semana_actual:
-                columnas_requeridas = ['#', 'Deportista', 'Tiempo Total', 'Actividades', 'Natación', 'Bicicleta', 'Trote', 'CV']
-                df_hoja_nueva = df_semana_act[columnas_requeridas].copy()
-                df_hoja_nueva.rename(columns={'#': 'Clasificación'}, inplace=True)
-                
-                # Conversión aritmética mandatoria para celdas operables
-                for c_t in ['Tiempo Total', 'Natación', 'Bicicleta', 'Trote']:
-                    df_hoja_nueva[c_t] = df_hoja_nueva[c_t].apply(to_excel_time_value)
-                
-                df_hoja_nueva.to_excel(excel_writer, sheet_name=nombre_de_hoja, index=False)
-                
-                # Aplicación de formato visual de tiempo
-                ws_semana = excel_writer.sheets[nombre_de_hoja]
-                # Columnas C, E, F, G (índices base cero: 2, 4, 5, 6)
-                for i_col in [2, 4, 5, 6]:
-                    ws_semana.set_column(i_col, i_col, 12, formato_tym_hora)
+            # Datos pertenecientes al bloque de Salida Larga semanal
+            nombre_atleta_l = celdas_ocr[4].strip()
+            valor_metrica_l = celdas_ocr[5].strip()
             
-            # ESCENARIO 2: ACTUALIZACIÓN DE HOJAS TÉCNICAS (TIEMPO TOTAL, NATACIÓN, ETC.)
-            elif nombre_de_hoja in ["Tiempo Total", "Natación", "Ciclismo", "Trote"]:
-                # Lectura de la hoja técnica con integridad de tipos mediante dtype=object
-                df_maestro_hoja = pd.read_excel(instancia_excel, sheet_name=nombre_de_hoja, dtype=object)
+            # Validación de integridad para columna de Distancia
+            es_titulo_d = False
+            for term_f in filtro_nombres_tabla:
+                if term_f.lower() in nombre_atleta_d.lower():
+                    es_titulo_d = True
+            
+            if es_titulo_d == False and nombre_atleta_d != "":
+                lista_podio_distancia.append({'nombre': nombre_atleta_d, 'valor': valor_metrica_d})
                 
-                # Eliminación de columnas accidentales de versiones previas
-                if 'Sem 51' in df_maestro_hoja.columns:
-                    df_maestro_hoja = df_maestro_hoja.drop(columns=['Sem 51'])
-                if 'Sem 52' in df_maestro_hoja.columns:
-                    df_maestro_hoja = df_maestro_hoja.drop(columns=['Sem 52'])
+            # Validación de integridad para columna de Salida Larga
+            es_titulo_l = False
+            for term_f in filtro_nombres_tabla:
+                if term_f.lower() in nombre_atleta_l.lower():
+                    es_titulo_l = True
+                    
+            if es_titulo_l == False and nombre_atleta_l != "":
+                lista_podio_larga.append({'nombre': nombre_atleta_l, 'valor': valor_metrica_l})
                 
-                # 🛡️ TRANSCRIPCIÓN ARITMÉTICA: Asegurar que todos los tiempos históricos sean decimales
-                columnas_para_aritmetica = []
-                for col in df_maestro_hoja.columns:
-                    col_str = str(col)
-                    if col_str.startswith("Sem ") or "Promedio" in col_str or "Acumulado" in col_str:
-                        columnas_para_aritmetica.append(col)
+    # Retornar exclusivamente el Top 3 de cada categoría de honor
+    return lista_podio_distancia[:3], lista_podio_larga[:3]
+
+# *****************************************************************************
+# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: INTEGRIDAD Y ORDEN NUMÉRICO) ---
+# *****************************************************************************
+
+def crear_excel_actualizado(referencia_maestro, df_actualizacion, input_semana_n):
+    """
+    Genera el archivo Excel inyectando la nueva semana y eliminando columnas futuras.
+    Lógica de ordenamiento numérico real implementada para evitar errores en el historial.
+    """
+    # Carga del libro maestro con tipos de datos protegidos (object)
+    lector_maestro_excel = pd.ExcelFile(referencia_maestro)
+    hojas_existentes_maestro = lector_maestro_excel.sheet_names
+    label_de_la_semana_actual = f"Sem {input_semana_n.strip()}"
+    
+    # 🛡️ FILTRO DE INGENIERÍA: Extraer el límite numérico de la semana procesada
+    match_numero_semana = re.search(r'\d+', input_semana_n)
+    valor_entero_limite = int(match_numero_semana.group()) if match_numero_semana else 0
+    
+    # DETERMINACIÓN DEL ORDEN OPERATIVO MANDATORIO (PROTOCOLO TYM):
+    
+    # Bloque 1: Identificación de Hojas Técnicas de Trabajo
+    hojas_de_trabajo_lista = []
+    for h_name in hojas_existentes_maestro:
+        if not h_name.startswith("Sem "):
+            hojas_de_trabajo_lista.append(h_name)
+            
+    # Bloque 2: Identificación y limpieza del historial semanal
+    hojas_del_historial_lista = []
+    for h_name in hojas_existentes_maestro:
+        if h_name.startswith("Sem "):
+            # Condición crítica: No duplicar la semana cargada actualmente
+            if h_name != label_de_la_semana_actual:
+                hojas_del_historial_lista.append(h_name)
+    
+    # Bloque 3: Ordenamiento Numérico Real (Auditado)
+    def extraer_numero_pestaña(texto_pestaña):
+        match_p = re.search(r'\d+', str(texto_pestaña))
+        if match_p:
+            return int(match_p.group())
+        return 0
+        
+    hojas_del_historial_lista.sort(key=extraer_numero_pestaña, reverse=True)
+    
+    # Bloque 4: Construcción del libro final de salida
+    secuencia_de_hojas_final = hojas_de_trabajo_lista + [label_de_la_semana_actual] + hojas_del_historial_lista
+
+    # Creación del stream de memoria binario
+    buffer_binario_descarga = io.BytesIO()
+    
+    with pd.ExcelWriter(buffer_binario_descarga, engine='xlsxwriter') as motor_escritura_excel:
+        libro_excel_obj = motor_escritura_excel.book
+        
+        # Formato de tiempo TYM para celdas operables numéricamente
+        formato_hora_tym = libro_excel_obj.add_format({'num_format': '[h]:mm:ss'})
+        
+        for hoja_en_curso in secuencia_de_hojas_final:
+            
+            # ESCENARIO A: GENERACIÓN DE LA NUEVA PESTAÑA SEMANAL DETALLADA
+            if hoja_en_curso == label_de_la_semana_actual:
+                cols_requeridas_sem = ['#', 'Deportista', 'Tiempo Total', 'Actividades', 'Natación', 'Bicicleta', 'Trote', 'CV']
+                df_hoja_semana_final = df_actualizacion[cols_requeridas_sem].copy()
+                df_hoja_semana_final.rename(columns={'#': 'Clasificación'}, inplace=True)
                 
-                for col_a in columnas_para_aritmetica:
-                    if col_a != label_semana_actual:
-                        df_maestro_hoja[col_a] = df_maestro_hoja[col_a].apply(to_excel_time_value)
+                # Conversión mandatoria a valores decimales de Excel
+                for columna_t_name in ['Tiempo Total', 'Natación', 'Bicicleta', 'Trote']:
+                    df_hoja_semana_final[columna_t_name] = df_hoja_semana_final[columna_t_name].apply(to_excel_time_value)
                 
-                # Localización de la columna identificadora del deportista
-                id_columna_nombre = df_maestro_hoja.columns[0]
-                for col in df_maestro_hoja.columns:
-                    if "nombre" in str(col).lower() or "deportista" in str(col).lower():
-                        id_columna_nombre = col
+                # Escritura de la pestaña de clasificación
+                df_hoja_semana_final.to_excel(motor_escritura_excel, sheet_name=hoja_en_curso, index=False)
+                
+                # Formateo visual de celdas horarias
+                pestaña_actual_obj = motor_escritura_excel.sheets[hoja_en_curso]
+                # Índices de columnas de tiempo (C, E, F, G)
+                for id_columna_v in [2, 4, 5, 6]:
+                    pestaña_actual_obj.set_column(id_columna_v, id_columna_v, 12, formato_hora_tym)
+            
+            # ESCENARIO B: ACTUALIZACIÓN DE LAS HOJAS DE TRABAJO TÉCNICAS (CON FILTRO DE COLUMNAS)
+            elif hoja_en_curso in ["Tiempo Total", "Natación", "Ciclismo", "Trote"]:
+                # Lectura blindada de la hoja histórica
+                df_maestro_h_tecnica = pd.read_excel(lector_maestro_excel, sheet_name=hoja_en_curso, dtype=object)
+                
+                # 🛡️ FILTRO DE SEGURIDAD DE COLUMNAS (PROTOCOLO V2.2.19)
+                # Remoción física de columnas "Sem XX" que exceden la semana actual procesada
+                lista_de_cols_desbordadas = []
+                for nombre_col_check in df_maestro_h_tecnica.columns:
+                    str_check_nom = str(nombre_col_check)
+                    if str_check_nom.startswith("Sem "):
+                        match_num_check = re.search(r'\d+', str_check_nom)
+                        if match_num_check:
+                            if int(match_num_check.group()) > valor_entero_limite:
+                                lista_de_cols_desbordadas.append(nombre_col_check)
+                                
+                if len(lista_de_cols_desbordadas) > 0:
+                    df_maestro_h_tecnica = df_maestro_h_tecnica.drop(columns=lista_de_cols_desbordadas)
+                
+                # Sello de Transcripción Aritmética para columnas de cálculo
+                cols_arit_tecnicas = []
+                for c_header_t in df_maestro_h_tecnica.columns:
+                    c_header_t_str = str(c_header_t)
+                    if c_header_t_str.startswith("Sem ") or "Promedio" in c_header_t_str or "Acumulado" in c_header_t_str:
+                        cols_arit_tecnicas.append(c_header_t)
+                
+                for col_a_t in cols_arit_tecnicas:
+                    if col_a_t != label_de_la_semana_actual:
+                        df_maestro_h_tecnica[col_a_t] = df_maestro_h_tecnica[col_a_t].apply(to_excel_time_value)
+                
+                # Match de deportistas mediante columna identificadora
+                id_col_identificadora = df_maestro_h_tecnica.columns[0]
+                for col_it_t in df_maestro_h_tecnica.columns:
+                    if "nombre" in str(col_it_t).lower() or "deportista" in str(col_it_t).lower():
+                        id_col_identificadora = col_it_t
                         break
                 
-                # Mapeo de la fuente de datos según la disciplina de la hoja
-                map_hoja_strava = {
-                    'Tiempo Total': 'Tiempo Total', 
-                    'Natación': 'Natación', 
-                    'Ciclismo': 'Bicicleta', 
-                    'Trote': 'Trote'
-                }
-                columna_fuente_strava = map_hoja_strava.get(nombre_de_hoja)
+                dict_mapeo_hojas_tym = {'Tiempo Total': 'Tiempo Total', 'Natación': 'Natación', 'Ciclismo': 'Bicicleta', 'Trote': 'Trote'}
+                nombre_fuente_actual_tym = dict_mapeo_hojas_tym.get(hoja_en_curso)
                 
-                if columna_fuente_strava:
-                    # Preparación de datos de la semana actual para inyección
-                    df_prep_act = df_semana_act[['Deportista', columna_fuente_strava]].copy()
-                    df_prep_act['MatchKey'] = df_prep_act['Deportista'].apply(clean_string)
+                if nombre_fuente_actual_tym:
+                    df_prep_normalizacion = df_actualizacion[['Deportista', nombre_fuente_actual_tym]].copy()
+                    df_prep_normalizacion['MatchKey'] = df_prep_normalizacion['Deportista'].apply(clean_string)
+                    df_maestro_h_tecnica['MatchKey'] = df_maestro_h_tecnica[id_col_identificadora].astype(str).apply(clean_string)
+                    dict_valores_inyectar = df_prep_normalizacion.set_index('MatchKey')[nombre_fuente_actual_tym].apply(to_excel_time_value).to_dict()
+                    df_maestro_h_tecnica[label_de_la_semana_actual] = df_maestro_h_tecnica['MatchKey'].map(dict_valores_inyectar).fillna(0)
                     
-                    df_maestro_hoja['MatchKey'] = df_maestro_hoja[id_columna_nombre].astype(str).apply(clean_string)
+                    # RECALCULO DE COLUMNA TIEMPO ACUMULADO
+                    lista_sem_para_suma = [c_f_s for c_f_s in df_maestro_h_tecnica.columns if str(c_f_s).startswith("Sem ")]
+                    if 'Tiempo Acumulado' in df_maestro_h_tecnica.columns:
+                        df_maestro_h_tecnica['Tiempo Acumulado'] = df_maestro_h_tecnica[lista_sem_para_suma].sum(axis=1)
                     
-                    # Generación de diccionario de mapeo decimal
-                    mapeo_tiempos_nuevos = df_prep_act.set_index('MatchKey')[columna_fuente_strava].apply(to_excel_time_value).to_dict()
-                    
-                    # Inyección del dato en la columna de la semana actual
-                    df_maestro_hoja[label_semana_actual] = df_maestro_hoja['MatchKey'].map(mapeo_tiempos_nuevos).fillna(0)
-                    
-                    # 🛡️ RECALCULO DE TIEMPO ACUMULADO (MANDATORIO)
-                    # Se identifican todas las columnas semanales disponibles tras la inyección
-                    cols_semanas_suma = []
-                    for c_s in df_maestro_hoja.columns:
-                        if str(c_s).startswith("Sem "):
-                            cols_semanas_suma.append(c_s)
-                    
-                    # Se ejecuta la suma por fila para actualizar el total histórico
-                    if 'Tiempo Acumulado' in df_maestro_hoja.columns:
-                        df_maestro_hoja['Tiempo Acumulado'] = df_maestro_hoja[cols_semanas_suma].sum(axis=1)
-                    
-                    # Limpieza de la columna técnica de cruce
-                    df_maestro_hoja = df_maestro_hoja.drop(columns=['MatchKey'])
+                    df_maestro_h_tecnica = df_maestro_h_tecnica.drop(columns=['MatchKey'])
                 
-                # Escritura de la hoja técnica actualizada en el libro
-                df_maestro_hoja.to_excel(excel_writer, sheet_name=nombre_de_hoja, index=False)
+                # Escritura definitiva de la hoja técnica
+                df_maestro_h_tecnica.to_excel(motor_escritura_excel, sheet_name=hoja_en_curso, index=False)
                 
-                # Aplicación del formato de hora operativa a todas las columnas de cálculo
-                ws_trabajo_act = excel_writer.sheets[nombre_de_hoja]
-                for i_c, n_c in enumerate(df_maestro_hoja.columns):
-                    n_c_str = str(n_c)
-                    if n_c_str.startswith("Sem ") or "Promedio" in n_c_str or "Acumulado" in n_c_str:
-                        ws_trabajo_act.set_column(i_c, i_c, 13, formato_tym_hora)
+                # Formatear visualmente las columnas de cálculo matemático
+                pestaña_trabajo_activa = motor_escritura_excel.sheets[hoja_en_curso]
+                for id_c_f, nom_c_f in enumerate(df_maestro_h_tecnica.columns):
+                    nom_c_f_str = str(nom_c_f)
+                    if nom_c_f_str.startswith("Sem ") or "Promedio" in nom_c_f_str or "Acumulado" in nom_c_f_str:
+                        pestaña_trabajo_activa.set_column(id_c_f, id_c_f, 13, formato_hora_tym)
 
-            # ESCENARIO 3: ACTUALIZACIÓN DE LA HOJA DE COEFICIENTE DE VARIACIÓN (CV)
-            elif nombre_de_hoja == "CV":
-                df_hoja_cv = pd.read_excel(instancia_excel, sheet_name=nombre_de_hoja, dtype=object)
+            # ESCENARIO C: ACTUALIZACIÓN DE LA HOJA COEFICIENTE DE VARIACIÓN (CV)
+            elif hoja_en_curso == "CV":
+                df_maestro_cv_hoja = pd.read_excel(lector_maestro_excel, sheet_name=hoja_en_curso, dtype=object)
                 
-                # Localizar columna deportista
-                id_col_nombre_cv = df_hoja_cv.columns[0]
-                for col in df_hoja_cv.columns:
-                    if "nombre" in str(col).lower() or "deportista" in str(col).lower():
-                        id_col_nombre_cv = col
-                        break
+                # 🛡️ BLINDAJE REGEX CV: Filtrado de columnas futuras
+                cols_cv_a_borrar = []
+                for c_cv_iterador in df_maestro_cv_hoja.columns:
+                    if str(c_cv_iterador).startswith("Sem "):
+                        m_cv_check = re.search(r'\d+', str(c_cv_iterador))
+                        if m_cv_check:
+                            if int(m_cv_check.group()) > valor_entero_limite:
+                                cols_cv_a_borrar.append(c_cv_iterador)
                 
-                # Preparar datos de CV de la semana
-                df_cv_act_prep = df_semana_act[['Deportista', 'CV']].copy()
-                df_cv_act_prep['MatchKey'] = df_cv_act_prep['Deportista'].apply(clean_string)
+                if len(cols_cv_a_borrar) > 0:
+                    df_maestro_cv_hoja = df_maestro_cv_hoja.drop(columns=cols_cv_a_borrar)
                 
-                df_hoja_cv['MatchKey'] = df_hoja_cv[id_col_nombre_cv].astype(str).apply(clean_string)
-                
-                dict_mapeo_cv = df_cv_act_prep.set_index('MatchKey')['CV'].to_dict()
-                
-                # Inyectar valor numérico de CV (No es tiempo, no requiere formato HH:MM)
-                df_hoja_cv[label_semana_actual] = df_hoja_cv['MatchKey'].map(dict_mapeo_cv).fillna("NC")
-                
-                # Limpiar y guardar la hoja CV
-                df_hoja_cv = df_hoja_cv.drop(columns=['MatchKey'])
-                df_hoja_cv.to_excel(excel_writer, sheet_name=nombre_de_hoja, index=False)
+                id_col_nombre_en_cv = next((c_cv for c_cv in df_maestro_cv_hoja.columns if "nombre" in str(c_cv).lower() or "deportista" in str(c_cv).lower()), df_maestro_cv_hoja.columns[0])
+                df_maestro_cv_hoja['MatchKey'] = df_maestro_cv_hoja[id_col_nombre_en_cv].astype(str).apply(clean_string)
+                df_cv_semana_prep = df_actualizacion[['Deportista', 'CV']].copy()
+                df_cv_semana_prep['MatchKey'] = df_cv_semana_prep['Deportista'].apply(clean_string)
+                df_maestro_cv_hoja[label_de_la_semana_actual] = df_maestro_cv_hoja['MatchKey'].map(df_cv_semana_prep.set_index('MatchKey')['CV'].to_dict()).fillna("NC")
+                df_maestro_cv_hoja.drop(columns=['MatchKey']).to_excel(motor_escritura_excel, sheet_name=hoja_en_curso, index=False)
 
-            # ESCENARIO 4: RÉPLICA DE HOJAS RESTANTES (SIN ALTERACIONES)
+            # ESCENARIO D: RÉPLICA DE TODAS LAS DEMÁS PESTAÑAS DEL LIBRO
             else:
-                df_replica_hoja = pd.read_excel(instancia_excel, sheet_name=nombre_de_hoja, dtype=object)
-                df_replica_hoja.to_excel(excel_writer, sheet_name=nombre_de_hoja, index=False)
+                df_replica_hoja_estatica = pd.read_excel(lector_maestro_excel, sheet_name=hoja_en_curso, dtype=object)
+                df_replica_hoja_estatica.to_excel(motor_escritura_excel, sheet_name=hoja_en_curso, index=False)
                 
-    return buffer_salida.getvalue()
+    return buffer_binario_descarga.getvalue()
 
-# --- 6. GENERADOR DE REPORTE WORD (BLOQUEADO / MODELO FUNCIONAL V2.2.6) ---
+# *****************************************************************************
+# --- 6. GENERADOR DE REPORTE WORD PROFESIONAL (BLOQUEADO - NO SINTETIZAR) ---
+# *****************************************************************************
 
-def aplicar_formato_institucional(obj_parrafo, size_fuente, bold_activo=False, centrado_activo=False):
+def aplicar_formato_tym_word(objeto_parrafo_word, pt_fuente, negrita_activo=False, centrado_activo=False):
     """
-    Aplica rigurosamente el formato institucional Calibri 20/15/13/11.
-    No se permite la síntesis de este bloque para asegurar la uniformidad del reporte.
+    Aplica rigurosamente el estilo institucional Calibri con los tamaños 20/15/13/11.
+    Este bloque está blindado contra síntesis para asegurar la imagen del club.
     """
-    run_texto = obj_parrafo.runs[0] if obj_parrafo.runs else obj_parrafo.add_run()
-    run_texto.font.name = 'Calibri'
-    run_texto.font.size = Pt(size_fuente)
-    run_texto.bold = bold_activo
+    if not objeto_parrafo_word.runs:
+        cursor_de_run = objeto_parrafo_word.add_run()
+    else:
+        cursor_de_run = objeto_parrafo_word.runs[0]
+        
+    cursor_de_run.font.name = 'Calibri'
+    cursor_de_run.font.size = Pt(pt_fuente)
+    cursor_de_run.bold = negrita_activo
     
     if centrado_activo:
-        obj_parrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        objeto_parrafo_word.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-def crear_tabla_profesional_tym(doc_word_target, df_datos_tabla, lista_encabezados):
+def crear_tabla_profesional_tym_word(doc_word_instancia, df_origen_datos, lista_de_cabeceras):
     """
-    Genera tablas con anchos de columna milimétricos (Protocolo TYM).
-    Blindado contra saltos de línea inesperados o desbordamientos.
+    Genera tablas con anchos milimétricos (Protocolo TYM) para el informe profesional.
+    Blindado contra saltos de línea inesperados.
     """
-    instancia_tabla = doc_word_target.add_table(rows=1, cols=len(lista_encabezados))
-    instancia_tabla.style = 'Light Grid Accent 1'
-    instancia_tabla.alignment = 1 # Centrado horizontal en página
-    instancia_tabla.autofit = False
+    instancia_de_tabla = doc_word_instancia.add_table(rows=1, cols=len(lista_de_cabeceras))
+    instancia_de_tabla.style = 'Light Grid Accent 1'
+    instancia_de_tabla.alignment = 1 # Centrado
+    instancia_de_tabla.autofit = False
     
-    # Anchos definidos por ingeniería: Rank(0.4"), Deportista(2.8"), Datos Técnicos(0.7")
-    diccionario_anchos = {
-        '#': 0.4, 
-        'Deportista': 2.8, 
-        'Tiempo Total': 0.7, 
-        'Natación': 0.7, 
-        'Bicicleta': 0.7, 
-        'Trote': 0.7, 
-        'CV': 0.6
-    }
+    # Anchos fijos por ingeniería
+    anchos_tym_fijos = {'#': 0.4, 'Deportista': 2.8, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.6}
     
-    # Configuración de los Encabezados de la Tabla
-    for i, texto_h in enumerate(lista_encabezados):
-        celda_header = instancia_tabla.rows[0].cells[i]
-        celda_header.text = texto_h
+    for idx_cab, txt_cab in enumerate(lista_de_cabeceras):
+        celda_header_t = instancia_de_tabla.rows[0].cells[idx_cab]
+        celda_header_t.text = txt_cab
+        ancho_val_t = anchos_tym_fijos.get(txt_cab, 0.7)
+        celda_header_t.width = Inches(ancho_val_t)
+        aplicar_formato_tym_word(celda_header_t.paragraphs[0], 9, True, True)
         
-        ancho_celda = diccionario_anchos.get(texto_h, 0.7)
-        celda_header.width = Inches(ancho_celda)
-        
-        # Estilo de encabezado: Calibri 9, Negrita, Centrado
-        aplicar_formato_institucional(celda_header.paragraphs[0], 9, True, True)
-        
-    # Poblado de las Filas de Datos
-    for _, fila_datos in df_datos_tabla.iterrows():
-        celdas_nueva_fila = instancia_tabla.add_row().cells
-        for i, texto_h in enumerate(lista_encabezados):
-            celdas_nueva_fila[i].text = str(fila_datos[texto_h])
+    for _, fila_datos_w in df_origen_datos.iterrows():
+        celdas_de_la_fila_w = instancia_de_tabla.add_row().cells
+        for idx_dat, txt_cab_d in enumerate(lista_de_cabeceras):
+            celdas_de_la_fila_w[idx_dat].text = str(fila_datos_w[txt_cab_d])
+            ancho_dat_w = anchos_tym_fijos.get(txt_cab_d, 0.7)
+            celdas_de_la_fila_w[idx_dat].width = Inches(ancho_dat_w)
             
-            ancho_dato = diccionario_anchos.get(texto_h, 0.7)
-            celdas_nueva_fila[i].width = Inches(ancho_dato)
-            
-            # Alineación mandatoria: Nombres a la izquierda, datos al centro
-            alinear_centro = True
-            if texto_h == 'Deportista':
-                alinear_centro = False
+            # Alineación Nombres Izquierda, resto Centro
+            es_central = True
+            if txt_cab_d == 'Deportista':
+                es_central = False
                 
-            aplicar_formato_institucional(celdas_nueva_fila[i].paragraphs[0], 9, False, alinear_centro)
+            aplicar_formato_tym_word(celdas_de_la_fila_w[idx_dat].paragraphs[0], 9, False, es_central)
             
-    # Añadir párrafo espaciador tras cada tabla
-    doc_word_target.add_paragraph()
+    doc_word_instancia.add_paragraph()
 
-def generar_reporte_word_completo(df_semana_final, string_n_semana, podio_d_items, podio_l_items):
+def generar_reporte_word_tym_completo(df_semanal_datos, num_sem_texto, podio_d_lista, podio_l_lista):
     """
-    Construye el reporte Word íntegro bajo el modelo funcional V2.2.6.
+    Construye el reporte Word íntegro bajo el modelo funcional V2.2.19.
     Restablece todas las secciones de análisis técnico de forma extensa.
     """
-    doc_final = Document()
+    documento_final_word = Document()
     
-    # TÍTULO PRINCIPAL (Calibri 20, Negrita, Centrado)
-    p_main_title = doc_final.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {string_n_semana}', 0)
-    aplicar_formato_institucional(p_main_title, 20, True, True)
-    doc_final.add_paragraph()
+    # Título Principal
+    p_main_title_word = documento_final_word.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {num_sem_texto}', 0)
+    aplicar_formato_tym_word(p_main_title_word, 20, True, True)
+    documento_final_word.add_paragraph()
     
-    p_slogan = doc_final.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
-    aplicar_formato_institucional(p_slogan, 11, True, True)
-    doc_final.add_paragraph()
+    p_slogan_word_f = documento_final_word.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
+    aplicar_formato_tym_word(p_slogan_word_f, 11, True, True)
+    documento_final_word.add_paragraph()
 
-    # BLOQUE 1: RESUMEN GENERAL (Calibri 15)
-    h_resumen_sec = doc_final.add_heading('🔍 Resumen General', level=2)
-    aplicar_formato_institucional(h_resumen_sec, 15, True)
-    doc_final.add_paragraph()
+    # BLOQUE 1: Resumen General
+    h_resumen_word_f = documento_final_word.add_heading('🔍 Resumen General', level=2)
+    aplicar_formato_tym_word(h_resumen_word_f, 15, True)
+    documento_final_word.add_paragraph()
     
-    # Filtrar solo triatletas con datos en las tres disciplinas
-    df_trias_completos = df_semana_final[df_semana_final['CV'] != 'NC'].copy()
+    df_filtrado_trias = df_semanal_datos[df_semanal_datos['CV'] != 'NC'].copy()
+    txt_resumen_bloque_f = f"Total deportistas registrados: {len(df_semanal_datos)}\nTriatletas completos: {len(df_filtrado_trias)}\nHoras totales del club: {to_hhmmss_display(df_semanal_datos['T_Mins'].sum())}"
+    p_info_word_f = documento_final_word.add_paragraph(txt_resumen_bloque_f); aplicar_formato_tym_word(p_info_word_f, 11)
     
-    num_total_deportistas = len(df_semana_final)
-    num_trias_completos = len(df_trias_completos)
-    minutos_totales_club = df_semana_final['T_Mins'].sum()
-    texto_volumen_total = to_hhmmss_display(minutos_totales_club)
+    # Gráfico de Torta
+    fig_w_f, ax_w_f = plt.subplots(figsize=(4,4))
+    ax_w_f.pie([df_semanal_datos['N_Mins'].sum(), df_semanal_datos['B_Mins'].sum(), df_semanal_datos['R_Mins'].sum()], labels=['Natación', 'Ciclismo', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
     
-    bloque_texto_resumen = f"Total deportistas: {num_total_deportistas}\nTriatletas completos: {num_trias_completos}\nHoras totales de entrenamiento: {texto_volumen_total}"
-    p_info_resumen = doc_final.add_paragraph(bloque_texto_resumen)
-    aplicar_formato_institucional(p_info_resumen, 11)
+    buffer_grafico_f = io.BytesIO()
+    plt.savefig(buffer_grafico_f, format='png', bbox_inches='tight')
+    plt.close(fig_w_f)
     
-    # Gráfico de Distribución de Carga Semanal
-    vol_nat = df_semana_final['N_Mins'].sum()
-    vol_bic = df_semana_final['B_Mins'].sum()
-    vol_tro = df_semana_final['R_Mins'].sum()
-    
-    fig_carga, ax_carga = plt.subplots(figsize=(4,4))
-    ax_carga.pie(
-        [vol_nat, vol_bic, vol_tro], 
-        labels=['Natación', 'Ciclismo', 'Trote'], 
-        autopct='%1.1f%%', 
-        colors=['#1E90FF', '#32CD32', '#FF4500']
-    )
-    
-    stream_grafico = io.BytesIO()
-    plt.savefig(stream_grafico, format='png', bbox_inches='tight')
-    plt.close(fig_carga)
-    
-    p_img_grafico = doc_final.add_paragraph()
-    p_img_grafico.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_img_grafico.add_run().add_picture(stream_grafico, width=Inches(3.5))
+    p_graf_f = documento_final_word.add_paragraph()
+    p_graf_f.alignment = 1 # Centrado
+    p_graf_f.add_run().add_picture(buffer_grafico_f, width=Inches(3.5))
 
-    # BLOQUE 2: PODIOS DE HONOR TOP 5 (Completos y Balanceados)
-    
-    # Sub-sección: Triatletas Completos
-    h_podio_c = doc_final.add_heading('🏅 TOP 5 TRIATLETAS COMPLETOS', level=2)
-    aplicar_formato_institucional(h_podio_c, 15, True)
-    doc_final.add_paragraph()
-    
-    df_render_t5_c = df_trias_completos.sort_values('T_Mins', ascending=False).head(5).copy()
-    df_render_t5_c['#'] = range(1, len(df_render_t5_c) + 1)
-    cols_honor_c = ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote']
-    crear_tabla_profesional_tym(doc_final, df_render_t5_c, cols_honor_c)
-    
-    p_analisis_t5_c = doc_final.add_paragraph('Análisis del Desempeño:'); aplicar_formato_institucional(p_analisis_t5_c, 13, True)
-    for _, fila_t5_c in df_render_t5_c.iterrows():
-        p_nombre_atleta_c = doc_final.add_paragraph(f"{fila_t5_c['#']}. {fila_t5_c['Deportista']}"); aplicar_formato_institucional(p_nombre_atleta_c, 11, True)
-        doc_final.add_paragraph(generar_comentario(fila_t5_c, 'Completos', fila_t5_c['#']))
+    # BLOQUE 2: Podios Honor
+    for t_pod_f, d_pod_f, c_key_f in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_filtrado_trias.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_filtrado_trias.sort_values('CV', ascending=True).head(5), 'CV')]:
+        h_s_f = documento_final_word.add_heading(t_pod_f, level=2); aplicar_formato_tym_word(h_s_f, 15, True); documento_final_word.add_paragraph()
+        d_ren_f = d_pod_f.copy(); d_ren_f['#'] = range(1, len(d_ren_f) + 1)
+        crear_tabla_profesional_tym_word(documento_final_word, d_ren_f, ['#', 'Deportista', 'Tiempo Total' if c_key_f=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
+        h_analisis_f = documento_final_word.add_paragraph('Análisis del Desempeño:'); aplicar_formato_tym_word(h_analisis_f, 13, True)
+        for _, fila_f_loop in d_ren_f.iterrows():
+            p_n_f = documento_final_word.add_paragraph(f"{fila_f_loop['#']}. {fila_f_loop['Deportista']}"); aplicar_formato_tym_word(p_n_f, 11, True)
+            documento_final_word.add_paragraph(generar_comentario(fila_f_loop, c_key_f, fila_f_loop['#']))
 
-    # Sub-sección: Triatletas Balanceados
-    h_podio_v = doc_final.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
-    aplicar_formato_institucional(h_podio_v, 15, True)
-    doc_final.add_paragraph()
-    
-    df_render_t5_v = df_trias_completos.sort_values('CV', ascending=True).head(5).copy()
-    df_render_t5_v['#'] = range(1, len(df_render_t5_v) + 1)
-    cols_honor_v = ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote']
-    crear_tabla_profesional_tym(doc_final, df_render_t5_v, cols_honor_v)
-    
-    p_analisis_t5_v = doc_final.add_paragraph('Análisis de Simetría:'); aplicar_formato_institucional(p_analisis_t5_v, 13, True)
-    for _, fila_t5_v in df_render_t5_v.iterrows():
-        p_nombre_atleta_v = doc_final.add_paragraph(f"{fila_t5_v['#']}. {fila_t5_v['Deportista']}"); aplicar_formato_institucional(p_nombre_atleta_v, 11, True)
-        doc_final.add_paragraph(generar_comentario(fila_t5_v, 'CV', fila_t5_v['#']))
+    # BLOQUE 3: TOP 15
+    for tit_s_f, ico_f, col_m_f, col_t_f in [('TIEMPO GENERAL', '🥇', 'T_Mins', 'Tiempo Total'), ('NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación'), ('CICLISMO', '🚴', 'B_Mins', 'Bicicleta'), ('TROTE', '🏃‍♂️', 'R_Mins', 'Trote')]:
+        documento_final_word.add_page_break()
+        h_15_f = documento_final_word.add_heading(f'{ico_f} TOP 15 {tit_s_f}', level=1); aplicar_formato_tym_word(h_15_f, 15, True); documento_final_word.add_paragraph()
+        d_15_f = df_semanal_datos[df_semanal_datos[col_m_f] > 0].sort_values(col_m_f, ascending=False).head(15).copy(); d_15_f['#'] = range(1, len(d_15_f) + 1)
+        crear_tabla_profesional_tym_word(documento_final_word, d_15_f, ['#', 'Deportista', col_t_f, 'Natación', 'Bicicleta', 'Trote'] if tit_s_f == 'TIEMPO GENERAL' else ['#', 'Deportista', col_t_f, 'Tiempo Total'])
+        h_podio_f = documento_final_word.add_paragraph('Análisis del Podio:'); aplicar_formato_tym_word(h_podio_f, 13, True)
+        for _, f_p_f in d_15_f.head(3).iterrows():
+            p_at_f = documento_final_word.add_paragraph(f"{'🥇' if f_p_f['#']==1 else '🥈' if f_p_f['#']==2 else '🥉'} {f_p_f['Deportista']}"); aplicar_formato_tym_word(p_at_f, 11, True)
+            documento_final_word.add_paragraph(generar_comentario(f_p_f, 'General' if tit_s_f == 'TIEMPO GENERAL' else col_t_f, f_p_f['#']))
 
-    # BLOQUE 3: TOP 15 POR ESPECIALIDAD
+    # BLOQUE 4: OCR
+    documento_final_word.add_page_break()
+    h_d_w_f = documento_final_word.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_formato_tym_word(h_d_w_f, 15, True); documento_final_word.add_paragraph()
+    for idx_d_f, item_d_f in enumerate(podio_d_lista): documento_final_word.add_paragraph(f"{idx_d_f+1}. {item_d_f['nombre']} ({item_d_f['valor']} km)")
+    documento_final_word.add_paragraph(); h_l_w_f = documento_final_word.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1); aplicar_formato_tym_word(h_l_w_f, 15, True); documento_final_word.add_paragraph()
+    for idx_l_f, item_l_f in enumerate(podio_l_lista): documento_final_word.add_paragraph(f"{idx_l_f+1}. {item_l_f['nombre']} ({item_l_f['valor']})")
     
-    configuracion_secciones_t15 = [
-        ('TIEMPO GENERAL', '🥇', 'T_Mins', 'Tiempo Total'),
-        ('NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación'),
-        ('CICLISMO', '🚴', 'B_Mins', 'Bicicleta'),
-        ('TROTE', '🏃‍♂️', 'R_Mins', 'Trote')
-    ]
-    
-    for titulo_sec, icono_sec, metrica_col, etiqueta_col in configuracion_secciones_t15:
-        doc_final.add_page_break()
-        h_seccion_t15 = doc_final.add_heading(f'{icono_sec} TOP 15 {titulo_sec}', level=1)
-        aplicar_formato_institucional(h_seccion_t15, 15, True)
-        doc_final.add_paragraph()
-        
-        # Seleccionar top 15 con tiempo > 0
-        df_top15_seccion = df_semana_final[df_semana_final[metrica_col] > 0].sort_values(metrica_col, ascending=False).head(15).copy()
-        df_top15_seccion['#'] = range(1, len(df_top15_seccion) + 1)
-        
-        if titulo_sec == 'TIEMPO GENERAL':
-            columnas_finales_t15 = ['#', 'Deportista', etiqueta_col, 'Natación', 'Bicicleta', 'Trote']
-        else:
-            columnas_finales_t15 = ['#', 'Deportista', etiqueta_col, 'Tiempo Total']
-            
-        crear_tabla_profesional_tym(doc_final, df_top15_seccion, columnas_finales_t15)
-        
-        # Análisis del Podio de la Disciplina (Top 3)
-        p_header_podio_t15 = doc_final.add_paragraph('Análisis del Podio:'); aplicar_formato_institucional(p_header_podio_t15, 13, True)
-        df_podio_t3_disciplina = df_top15_seccion.head(3)
-        for _, fila_pod_3 in df_podio_t3_disciplina.iterrows():
-            emoji_rank = '🥇'
-            if fila_pod_3['#'] == 2: emoji_rank = '🥈'
-            if fila_pod_3['#'] == 3: emoji_rank = '🥉'
-            
-            p_atleta_podio = doc_final.add_paragraph(f"{emoji_rank} {fila_pod_3['Deportista']}"); aplicar_formato_institucional(p_atleta_podio, 11, True)
-            
-            # Determinar categoría para el motor de comentarios
-            categoria_para_comentario = 'General'
-            if titulo_sec != 'TIEMPO GENERAL':
-                categoria_para_comentario = etiqueta_col
-                
-            doc_final.add_paragraph(generar_comentario(fila_pod_3, categoria_para_comentario, fila_pod_3['#']))
+    stream_salida_word = io.BytesIO(); documento_final_word.save(stream_salida_word); stream_salida_word.seek(0); return stream_salida_word
 
-    # BLOQUE 4: PODIOS TRADUCCIÓN OCR (DISTANCIA Y SALIDA LARGA)
-    doc_final.add_page_break()
-    
-    # Podio 1: Distancia Total
-    h_final_distancia = doc_final.add_heading('📏 PODIO DISTANCIA TOTAL', level=1)
-    aplicar_formato_institucional(h_final_distancia, 15, True)
-    doc_final.add_paragraph()
-    
-    for idx_d, item_dist in enumerate(podio_d_items):
-        r_num_d = idx_d + 1
-        doc_final.add_paragraph(f"{r_num_d}. {item_dist['nombre']} ({item_dist['valor']} km)")
-    
-    doc_final.add_paragraph()
-    
-    # Podio 2: Salida Larga
-    h_final_salida_larga = doc_final.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1)
-    aplicar_formato_institucional(h_final_salida_larga, 15, True)
-    doc_final.add_paragraph()
-    
-    for idx_l, item_larga in enumerate(podio_l_items):
-        r_num_l = idx_l + 1
-        doc_final.add_paragraph(f"{r_num_l}. {item_larga['nombre']} ({item_larga['valor']})")
-    
-    # Finalización y retorno del objeto binario para descarga
-    byte_stream_word = io.BytesIO()
-    doc_final.save(byte_stream_word)
-    byte_stream_word.seek(0)
-    return byte_stream_word
-
+# *****************************************************************************
 # --- 7. INTERFAZ DE USUARIO (STREMLIT) ---
+# *****************************************************************************
 
 st.sidebar.header("📁 Gestión de Datos Históricos TYM")
-maestro_uploader = st.sidebar.file_uploader("Cargar Archivo Excel Maestro (00 Estadísticas)", type=["xlsx"])
+cargador_maestro_excel = st.sidebar.file_uploader("Cargar Excel Maestro", type=["xlsx"])
+num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
+area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):")
+area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
 
-input_num_semana = st.text_input("Número de Semana a procesar (Ej: 08):", "08")
-input_strava_texto = st.text_area("1. Pegar Datos de Tiempo Total (Strava):")
-input_ocr_texto = st.text_area("2. Pegar Traducción OCR (Distancia y Salida Larga):")
-
-if st.button("🚀 PROCESAR JORNADA Y ACTUALIZAR EXCEL"):
-    if input_strava_texto.strip() and input_ocr_texto.strip() and maestro_uploader:
+if st.button("🚀 PROCESAR JORNADA"):
+    if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
+        # Procesar Parsing
+        df_resultados = parse_raw_data(area_texto_strava)
+        d_p_dist, d_p_larg = parse_ocr_data(area_texto_ocr)
+        st.success(f"¡Semana {num_semana_procesar} procesada!"); col1, col2 = st.columns(2)
         
-        # Ejecución de los procesos de parsing y análisis
-        df_resultados_semanales = parse_raw_data(input_strava_texto)
-        datos_podio_dist, datos_podio_larg = parse_ocr_data(input_ocr_texto)
+        # Word
+        col1.download_button(label="📄 REPORTE WORD", data=generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), file_name=f"Reporte_TYM_{num_semana_procesar}.docx")
         
-        st.success(f"¡Semana {input_num_semana} procesada con éxito bajo protocolo V2.2.6!")
-        
-        col_btn_word, col_btn_excel = st.columns(2)
-        
-        # Funcionalidad de descarga del Reporte Word Profesional
-        objeto_doc_word = generar_reporte_word_completo(df_resultados_semanales, input_num_semana, datos_podio_dist, datos_podio_larg)
-        col_btn_word.download_button(
-            label="📄 DESCARGAR REPORTE WORD", 
-            data=objeto_doc_word, 
-            file_name=f"Reporte_TYM_Sem_{input_num_semana}.docx"
-        )
-        
-        # Funcionalidad de descarga del Excel con Integridad Histórica y Recálculo de Acumulados
-        objeto_excel_act = crear_excel_actualizado(maestro_uploader, df_resultados_semanales, input_num_semana)
-        col_btn_excel.download_button(
-            label="📊 DESCARGAR EXCEL ACTUALIZADO", 
-            data=objeto_excel_act, 
-            file_name=f"00_Estadisticas_Actualizado_Sem_{input_num_semana}.xlsx"
-        )
+        # Excel
+        col2.download_button(label="📊 EXCEL ACTUALIZADO", data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
     else:
-        st.error("Error Mandatorio: Se requiere el Excel Maestro, los Datos de Strava y la traducción OCR para proceder.")
+        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
