@@ -41,10 +41,8 @@ def generar_comentario_inteligente(row, df_completo, categoria, pos):
     t_mins = row.get('T_Mins', 0)
     b_mins = row.get('B_Mins', 0)
     
-    # Análisis táctico de la bicicleta
     pct_bici = (b_mins / t_mins * 100) if t_mins > 0 else 0
     
-    # Contexto para "Completos"
     if categoria == 'General':
         if pos == 1:
             margen = t_mins - df_completo.iloc[1]['T_Mins'] if len(df_completo) > 1 else 0
@@ -61,7 +59,6 @@ def generar_comentario_inteligente(row, df_completo, categoria, pos):
         else:
             return f"Rendimiento de alto estándar. Sumar este volumen lo ratifica como uno de los motores principales del equipo esta semana."
 
-    # Contexto para "Balanceados (CV)"
     if categoria == 'CV':
         cv_val = float(row['CV'])
         if pos == 1:
@@ -72,7 +69,6 @@ def generar_comentario_inteligente(row, df_completo, categoria, pos):
         else:
             return f"Constancia y proporción. Cierra el podio de la simetría confirmando que se puede entrenar de forma inteligente y completa."
 
-    # Contexto para disciplinas individuales
     tiempo_str = row[categoria] if categoria in ['Natación', 'Bicicleta', 'Trote'] else ""
     if categoria == 'Natación':
         if pos == 1: return f"El rey/reina indiscutido del agua esta semana. {tiempo_str} nadando demuestran una técnica depurada y unos hombros que no conocen la fatiga."
@@ -162,6 +158,11 @@ def procesar_historico(df_semana, num_semana):
     
     if os.path.exists(HISTORICO_FILE):
         df_hist = pd.read_csv(HISTORICO_FILE)
+        
+        # PREVENCIÓN DE KEYERROR: Si la semana ya existe (re-procesamiento), la borramos para sobreescribirla limpia
+        if col_semana in df_hist.columns:
+            df_hist = df_hist.drop(columns=[col_semana])
+            
         df_hist = pd.merge(df_hist, df_nueva, on='Nombre', how='outer')
         df_hist[col_semana] = df_hist[col_semana].fillna(0)
     else:
@@ -241,13 +242,11 @@ def generar_word(df, semana_num):
         icono = '🥇' if row['#']==1 else '🥈' if row['#']==2 else '🥉' if row['#']==3 else str(row['#'])+'.'
         p.add_run(f"{icono} {row['Deportista']}").bold = True
         
-        # Línea técnica
         p_tech = doc.add_paragraph()
         p_tech.add_run(f"{row['Tiempo Total']} | {row['Actividades']} actividades | {row['Bicicleta']} ciclismo").italic = True
         
-        # Comentario inteligente
         com = generar_comentario_inteligente(row, top5_comp, 'General', row['#'])
-        doc.add_paragraph(f"\"{com}\"")
+        doc.add_paragraph(f"{com}")
 
     doc.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
     doc.add_paragraph('(Menor Coeficiente de Variación - La proporción perfecta entre disciplinas)')
@@ -260,7 +259,7 @@ def generar_word(df, semana_num):
         p = doc.add_paragraph()
         p.add_run(f"{row['#']}. {row['Deportista']} (CV: {row['CV']})").bold = True
         com = generar_comentario_inteligente(row, bal5, 'CV', row['#'])
-        doc.add_paragraph(f"\"{com}\"")
+        doc.add_paragraph(f"{com}")
 
     doc.add_heading('🥇 PODIO TIEMPO TOTAL GENERAL', level=2)
     doc.add_paragraph('(Incluyendo especialistas de disciplinas únicas)')
@@ -362,11 +361,9 @@ if st.button("Generar Reporte Completo"):
             st.success("¡Datos procesados! Gráficos y documentos listos.")
             df_hist_actualizado = procesar_historico(df, semana_input)
             
-            # Mostrar Resumen
             st.subheader("📋 Vista Previa: Top 5 General")
             st.dataframe(df[['Clasificación', 'Deportista', 'Tiempo Total', 'CV']].head(5))
             
-            # Gráfico Interactivo para la web
             st.subheader("📊 Distribución Web")
             fig_web = px.pie(values=[df['N_Mins'].sum(), df['B_Mins'].sum(), df['R_Mins'].sum()], names=['Natación', 'Ciclismo', 'Trote'], color_discrete_sequence=['#1E90FF', '#32CD32', '#FF4500'], hole=0.4)
             st.plotly_chart(fig_web, use_container_width=True)
