@@ -14,7 +14,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 st.set_page_config(page_title="Plataforma TYM 2026", page_icon="🏆", layout="wide")
 st.title("🏆 Gestión de Estadísticas y Reportes - Club TYM")
 
-# --- 2. UTILIDADES (BLINDADO) ---
+# --- 2. UTILIDADES DE PROCESAMIENTO (BLINDADO) ---
 def clean_string(text):
     if not text: return ""
     text = str(text).strip().upper()
@@ -23,6 +23,7 @@ def clean_string(text):
 def to_mins(t_str):
     if pd.isna(t_str) or str(t_str).strip() in ['--:--', '0', '', '00:00:00']: return 0
     try:
+        if isinstance(t_str, time): return t_str.hour * 60 + t_str.minute
         t_str = str(t_str).strip()
         if ':' in t_str:
             parts = t_str.split(':')
@@ -79,27 +80,35 @@ def parse_ocr_data(ocr_text):
             if n_l: larg.append({'nombre': n_l, 'valor': v_l})
     return dist[:3], larg[:3]
 
-# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: POSICIÓN DE HOJA) ---
+# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: POSICIÓN ENTRE SEM 07 Y CV) ---
 def crear_hoja_semanal_ordenada(archivo_maestro, df_semana, num_sem):
     xls = pd.ExcelFile(archivo_maestro)
     hojas_originales = xls.sheet_names
     nombre_nueva_hoja = f"Sem {num_sem.strip()}"
     
-    # Determinar el nuevo orden
+    # Determinar el nuevo orden para que quede entre las Semanas y CV
     nuevo_orden = []
     insertada = False
     
+    # Filtrar hojas Sem para encontrar la última
+    hojas_sem = [h for h in hojas_originales if h.startswith("Sem ") and h != nombre_nueva_hoja]
+    ultima_sem = hojas_sem[-1] if hojas_sem else None
+    
     for h in hojas_originales:
-        if h == nombre_nueva_hoja: continue # Evitar duplicados
-        # Insertar justo antes de la hoja "CV"
-        if h == "CV" and not insertada:
+        if h == nombre_nueva_hoja: continue
+        nuevo_orden.append(h)
+        # Si acabamos de añadir la última semana registrada, insertamos la nueva
+        if h == ultima_sem and not insertada:
             nuevo_orden.append(nombre_nueva_hoja)
             insertada = True
-        nuevo_orden.append(h)
-    
-    # Si por alguna razón no existe la hoja CV, añadir al final
+            
+    # Si no se insertó por falta de patrón, asegurar posición antes de CV
     if not insertada:
-        nuevo_orden.append(nombre_nueva_hoja)
+        if "CV" in nuevo_orden:
+            idx_cv = nuevo_orden.index("CV")
+            nuevo_orden.insert(idx_cv, nombre_nueva_hoja)
+        else:
+            nuevo_orden.append(nombre_nueva_hoja)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -167,15 +176,15 @@ def generar_word(df, sem, dist_p, larg_p):
 
 # --- 7. INTERFAZ ---
 archivo_maestro = st.sidebar.file_uploader("Subir Archivo 00 Estadísticas (Excel)", type=["xlsx"])
-sem_num = st.text_input("Número de Semana (Ej: 08):", "08")
+sem_num = st.text_input("Número de Semana:", "08")
 raw_data = st.text_area("1. Datos Tiempo Total:")
-ocr_input = st.text_area("2. Datos OCR (Captura):")
+ocr_input = st.text_area("2. Datos OCR (Traducción Captura):")
 
 if st.button("PROCESAR JORNADA COMPLETA"):
     if raw_data.strip() and ocr_input.strip() and archivo_maestro:
         df_sem = parse_raw_data(raw_data)
         dist_p, larg_p = parse_ocr_data(ocr_input)
-        st.success("¡Proceso completado!")
+        st.success("¡Proceso completado exitosamente!")
         c1, c2 = st.columns(2)
         c1.download_button("📄 REPORTE WORD", generar_word(df_sem, sem_num, dist_p, larg_p), f"Reporte_TYM_{sem_num}.docx")
         c2.download_button("📊 EXCEL ACTUALIZADO", crear_hoja_semanal_ordenada(archivo_maestro, df_sem, sem_num), "00_Estadisticas_Actualizado.xlsx")
