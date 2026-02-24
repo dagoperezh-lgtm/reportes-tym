@@ -87,19 +87,22 @@ def parse_ocr_data(ocr_text):
             larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
     return distancia_podio[:3], larga_podio[:3]
 
-# --- GESTIÓN DE EXCEL (CORREGIDO PARA KEYERROR) ---
+# --- GESTIÓN DE EXCEL (REFORZADO CONTRA VALUEERROR) ---
 def actualizar_excel_historico(df_actual, df_hist_previo, num_sem):
     col_nueva = f"Sem {num_sem}"
     df_nueva = df_actual[['Deportista', 'T_Mins']].rename(columns={'Deportista': 'Nombre', 'T_Mins': col_nueva})
+    # Limpieza estricta de nombres para el cruce
+    df_nueva['Nombre'] = df_nueva['Nombre'].astype(str).str.strip().str.upper()
     
     if df_hist_previo is not None:
-        # Normalizamos nombres de columnas del archivo subido para evitar el KeyError
+        # Normalización de columnas y contenido
         df_hist_previo.columns = [str(c).strip().capitalize() for c in df_hist_previo.columns]
-        
-        # Si la columna "Nombre" no existe bajo ese nombre, buscamos la primera que contenga texto
         if 'Nombre' not in df_hist_previo.columns:
             df_hist_previo.rename(columns={df_hist_previo.columns[0]: 'Nombre'}, inplace=True)
             
+        # Forzamos tipo texto y limpieza en el historial previo
+        df_hist_previo['Nombre'] = df_hist_previo['Nombre'].astype(str).str.strip().str.upper()
+        
         if col_nueva in df_hist_previo.columns:
             df_hist_previo = df_hist_previo.drop(columns=[col_nueva])
             
