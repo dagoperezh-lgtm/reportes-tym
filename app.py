@@ -9,12 +9,10 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIGURACIÓN DE PÁGINA (BLINDADO) ---
 st.set_page_config(page_title="Inteligencia TYM", page_icon="🏆", layout="wide")
 
 st.title("🏆 Plataforma de Inteligencia Deportiva - TYM")
-
-HISTORICO_FILE = "historico_tym.csv"
 
 # --- UTILIDADES DE TIEMPO (BLINDADO) ---
 def to_mins(t_str):
@@ -47,7 +45,7 @@ def generar_comentario(row, df_contexto, categoria, pos):
     if categoria == 'Trote': return f"Resistencia inalcanzable. {nombre} domina el asfalto con {tiempo}."
     return "Desempeño destacado."
 
-# --- PARSER DE DATOS ---
+# --- PARSER DE DATOS (BLINDADO) ---
 def parse_raw_data(raw_text):
     parsed_data = []
     rank_counter = 1 
@@ -87,7 +85,26 @@ def parse_ocr_data(ocr_text):
             larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
     return distancia_podio[:3], larga_podio[:3]
 
-# --- WORD GENERATOR ---
+# --- NUEVA FUNCIÓN: GESTIÓN DE EXCEL E HISTÓRICO ---
+def actualizar_excel_historico(df_actual, df_hist_previo, num_sem):
+    col_nueva = f"Sem {num_sem}"
+    df_nueva = df_actual[['Deportista', 'T_Mins']].rename(columns={'Deportista': 'Nombre', 'T_Mins': col_nueva})
+    
+    if df_hist_previo is not None:
+        if col_nueva in df_hist_previo.columns:
+            df_hist_previo = df_hist_previo.drop(columns=[col_nueva])
+        df_final = pd.merge(df_hist_previo, df_nueva, on='Nombre', how='outer').fillna(0)
+    else:
+        df_final = df_nueva
+    
+    # Calcular Acumulado Total
+    cols_sem = [c for c in df_final.columns if "Sem" in c]
+    df_final['Total Acumulado (mins)'] = df_final[cols_sem].sum(axis=1)
+    df_final['Total Formateado'] = df_final['Total Acumulado (mins)'].apply(to_hhmmss)
+    
+    return df_final.sort_values('Total Acumulado (mins)', ascending=False)
+
+# --- WORD GENERATOR (BLINDADO) ---
 def aplicar_estilo(parrafo, size, negrita=False, center=False):
     run = parrafo.runs[0] if parrafo.runs else parrafo.add_run()
     run.font.name = 'Calibri'
@@ -100,67 +117,49 @@ def crear_tabla_centrada(doc, df, cols):
     table.style = 'Light Grid Accent 1'
     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
     table.autofit = False
-    
     anchos = {'#': 0.3, 'Deportista': 3.0, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.5}
-
     for i, col_name in enumerate(cols):
         cell = table.rows[0].cells[i]
         cell.text = col_name
         cell.width = Inches(anchos.get(col_name, 0.7))
         aplicar_estilo(cell.paragraphs[0], 9, True, True)
-
     for _, row in df.iterrows():
         row_cells = table.add_row().cells
         for i, col_name in enumerate(cols):
-            # Aseguramos que no se pegue el nombre de la columna en los datos
             row_cells[i].text = str(row[col_name])
             row_cells[i].width = Inches(anchos.get(col_name, 0.7))
             aplicar_estilo(row_cells[i].paragraphs[0], 9, False, True if col_name != 'Deportista' else False)
-    
     doc.add_paragraph()
 
 def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
-    
-    # Titulo Principal Fuente 20
     h0 = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0)
     aplicar_estilo(h0, 20, True, True)
     doc.add_paragraph()
-    
     p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
     aplicar_estilo(p_intro, 11, True, True)
     doc.add_paragraph()
-
-    # Resumen
     h1 = doc.add_heading('🔍 Resumen General', level=2)
     aplicar_estilo(h1, 15, True)
     doc.add_paragraph()
-    
     df_c = df[df['CV'] != 'NC'].copy()
     t_m = df['T_Mins'].sum()
-    res_text = f'Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {int(t_m//60)}h {int(t_m%60)}m'
-    p_res = doc.add_paragraph(res_text)
+    p_res = doc.add_paragraph(f'Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {int(t_m//60)}h {int(t_m%60)}m')
     aplicar_estilo(p_res, 11)
-
-    # Gráfico Centrado
     fig, ax = plt.subplots(figsize=(4,4))
     ax.pie([df['N_Mins'].sum(), df['B_Mins'].sum(), df['R_Mins'].sum()], labels=['Nat', 'Bici', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
     img_s = io.BytesIO()
     plt.savefig(img_s, format='png', bbox_inches='tight')
     plt.close(fig)
-    
     p_img = doc.add_paragraph()
     p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_img.add_run().add_picture(img_s, width=Inches(3.5))
-
-    # TOP 5 COMPLETOS
     h2 = doc.add_heading('🏅 TOP 5 TRIATLETAS COMPLETOS', level=2)
     aplicar_estilo(h2, 15, True)
     doc.add_paragraph()
     t5 = df_c.sort_values('T_Mins', ascending=False).head(5).copy()
     t5['#'] = range(1, 6)
     crear_tabla_centrada(doc, t5, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
-    
     s1 = doc.add_paragraph('Análisis Ejecutivo')
     aplicar_estilo(s1, 13, True)
     for i, r in t5.iterrows():
@@ -168,8 +167,6 @@ def generar_word(df, sem, dist_p, larg_p):
         aplicar_estilo(p, 11, True)
         p_com = doc.add_paragraph(generar_comentario(r, t5, 'Completos', r['#']))
         aplicar_estilo(p_com, 11)
-
-    # BALANCEADOS
     h3 = doc.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
     aplicar_estilo(h3, 15, True)
     doc.add_paragraph()
@@ -177,7 +174,6 @@ def generar_word(df, sem, dist_p, larg_p):
     b5 = df_c.sort_values('CV_n').head(5).copy()
     b5['#'] = range(1, 6)
     crear_tabla_centrada(doc, b5, ['#', 'Deportista', 'CV', 'Natación', 'Bicicleta', 'Trote'])
-    
     s2 = doc.add_paragraph('Análisis de Simetría')
     aplicar_estilo(s2, 13, True)
     for i, r in b5.iterrows():
@@ -185,8 +181,6 @@ def generar_word(df, sem, dist_p, larg_p):
         aplicar_estilo(p, 11, True)
         p_com = doc.add_paragraph(generar_comentario(r, b5, 'CV', r['#']))
         aplicar_estilo(p_com, 11)
-
-    # GENERAL
     doc.add_page_break()
     h4 = doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=1)
     aplicar_estilo(h4, 15, True)
@@ -194,16 +188,12 @@ def generar_word(df, sem, dist_p, larg_p):
     t15 = df.sort_values('T_Mins', ascending=False).head(15).copy()
     t15['#'] = range(1, 16)
     crear_tabla_centrada(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
-    
     s3 = doc.add_paragraph('Análisis del Podio General')
     aplicar_estilo(s3, 13, True)
     for i, r in t15.head(3).iterrows():
         p = doc.add_paragraph(f"{r['#']}. {r['Deportista']}")
         aplicar_estilo(p, 11, True)
-        p_com = doc.add_paragraph(generar_comentario(r, t15, 'General', r['#']))
-        aplicar_estilo(p_com, 11)
-
-    # DISCIPLINAS
+        doc.add_paragraph(generar_comentario(r, t15, 'General', r['#']))
     for disc, col, icono, m_col in [('NATACIÓN', 'Natación', '🏊‍♂️', 'N_Mins'), ('CICLISMO', 'Bicicleta', '🚴', 'B_Mins'), ('TROTE', 'Trote', '🏃‍♂️', 'R_Mins')]:
         doc.add_page_break()
         hd = doc.add_heading(f'{icono} TOP 15 {disc}', level=1)
@@ -212,42 +202,47 @@ def generar_word(df, sem, dist_p, larg_p):
         d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15).copy()
         d15['#'] = range(1, len(d15)+1)
         crear_tabla_centrada(doc, d15, ['#', 'Deportista', col, 'Tiempo Total'])
-        
         sd = doc.add_paragraph('Análisis del Podio')
         aplicar_estilo(sd, 13, True)
         for i, r in d15.head(3).iterrows():
             p = doc.add_paragraph(f"{r['#']}. {r['Deportista']} ({r[col]})")
             aplicar_estilo(p, 11, True)
-            p_com = doc.add_paragraph(generar_comentario(r, d15, col, r['#']))
-            aplicar_estilo(p_com, 11)
-
-    # FINAL
+            doc.add_paragraph(generar_comentario(r, d15, col, r['#']))
     doc.add_page_break()
-    h5 = doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1)
-    aplicar_estilo(h5, 15, True)
-    doc.add_paragraph()
-    for i, p in enumerate(dist_p):
-        par = doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
-        aplicar_estilo(par, 11)
-
-    h6 = doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1)
-    aplicar_estilo(h6, 15, True)
-    doc.add_paragraph()
-    for i, p in enumerate(larg_p):
-        par = doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
-        aplicar_estilo(par, 11)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
+    h5 = doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_estilo(h5, 15, True); doc.add_paragraph()
+    for i, p in enumerate(dist_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
+    h6 = doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1); aplicar_estilo(h6, 15, True); doc.add_paragraph()
+    for i, p in enumerate(larg_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
+    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- UI ---
-sem_ui = st.text_input("Semana:", "08")
+# --- INTERFAZ USUARIO ---
+st.sidebar.header("📁 Gestión de Historial")
+archivo_hist_cargado = st.sidebar.file_uploader("Subir Excel de Historial (Opcional)", type=["xlsx", "csv"])
+
+sem_ui = st.text_input("Semana (Ej: 08):", "08")
 raw_ui = st.text_area("Datos Tiempo Total:")
 ocr_ui = st.text_area("Datos OCR Captura:")
-if st.button("Generar Reporte TYM Profesional"):
+
+if st.button("Generar Reporte y Actualizar Excel"):
     if raw_ui.strip() and ocr_ui.strip():
         df_res = parse_raw_data(raw_ui)
         dist_p, larg_p = parse_ocr_data(ocr_ui)
-        st.download_button("📄 DESCARGAR REPORTE PROFESIONAL", generar_word(df_res, sem_ui, dist_p, larg_p), f"Reporte_TYM_{sem_ui}.docx")
+        
+        # Procesar Historial
+        df_hist_previo = None
+        if archivo_hist_cargado:
+            df_hist_previo = pd.read_excel(archivo_hist_cargado) if archivo_hist_cargado.name.endswith('xlsx') else pd.read_csv(archivo_hist_cargado)
+        
+        df_hist_final = actualizar_excel_historico(df_res, df_hist_previo, sem_ui)
+        
+        # Botones de descarga
+        st.success("¡Reporte y Excel histórico generados!")
+        col1, col2 = st.columns(2)
+        
+        word_buf = generar_word(df_res, sem_ui, dist_p, larg_p)
+        col1.download_button("📄 DESCARGAR REPORTE WORD", word_buf, f"Reporte_TYM_{sem_ui}.docx")
+        
+        excel_buf = io.BytesIO()
+        df_hist_final.to_excel(excel_buf, index=False)
+        col2.download_button("📊 DESCARGAR EXCEL HISTÓRICO", excel_buf.getvalue(), f"Historial_TYM_Actualizado_{sem_ui}.xlsx")
