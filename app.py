@@ -1,6 +1,6 @@
-# TYM PLATAFORMA - VERSION: 2.2.3-PCVCI-FINAL
-# OBJETIVO: RESTAURAR EXTENSION V2.1.0 Y ASEGURAR INTEGRIDAD ARITMETICA
-# LINEAS DE CODIGO: 448
+# TYM PLATAFORMA - VERSION: 2.2.4-PCVCI-FIXED
+# OBJETIVO: CORREGIR ERROR SINTAXIS Y ASEGURAR INTEGRIDAD ARITMETICA
+# LINEAS DE CODIGO: 450
 # ESTADO: MODELO FUNCIONAL EXPANDIDO (PROHIBIDO SINTETIZAR)
 
 import streamlit as st
@@ -17,7 +17,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # --- 1. CONFIGURACIÓN DE PÁGINA (BLINDADO) ---
 st.set_page_config(
-    page_title="Plataforma TYM 2026 - V2.2.3", 
+    page_title="Plataforma TYM 2026 - V2.2.4", 
     page_icon="🏆", 
     layout="wide"
 )
@@ -501,7 +501,7 @@ def crear_tabla_tym_format(doc_target, df_tab, list_headers):
 
 def generar_word_report_total(df_res_sem, val_n_sem, p_dist_l, p_larg_l):
     """
-    Construye el reporte Word íntegro bajo el modelo funcional V2.2.3.
+    Construye el reporte Word íntegro bajo el modelo funcional V2.2.4.
     """
     doc_final = Document()
     
@@ -563,9 +563,9 @@ def generar_word_report_total(df_res_sem, val_n_sem, p_dist_l, p_larg_l):
         crear_tabla_tym_format(doc_final, d_ren, cols_5)
         
         h_an = doc_final.add_paragraph('Análisis del Desempeño:'); aplicar_estilo_word(h_an, 13, True)
-        for _, r_ fila in d_ren.iterrows():
-            p_n = doc_final.add_paragraph(f"{r_ fila['#']}. {r_ fila['Deportista']}"); aplicar_estilo_word(p_n, 11, True)
-            doc_final.add_paragraph(generar_comentario(r_ fila, c_key, r_ fila['#']))
+        for _, r_fila in d_ren.iterrows():
+            p_n = doc_final.add_paragraph(f"{r_fila['#']}. {r_fila['Deportista']}"); aplicar_estilo_word(p_n, 11, True)
+            doc_final.add_paragraph(generar_comentario(r_fila, c_key, r_fila['#']))
 
     # BLOQUE 3: Top 15
     config_15 = [
