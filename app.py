@@ -96,7 +96,7 @@ def parse_raw_data(raw_text):
         except: pass
     return pd.DataFrame(parsed_data)
 
-# --- NUEVA FUNCIONALIDAD: PARSER DE CAPTURA (OCR) ---
+# --- PARSER DE CAPTURA (OCR - BLINDADO) ---
 def parse_ocr_data(ocr_text):
     distancia_podio = []
     larga_podio = []
@@ -104,13 +104,11 @@ def parse_ocr_data(ocr_text):
     for line in lines:
         parts = line.split(';')
         if len(parts) >= 6:
-            # Captura Distancia Total (Nombre en índice 2, Km en índice 3)
             distancia_podio.append({'nombre': parts[2].strip(), 'valor': parts[3].strip()})
-            # Captura Salida más Larga (Nombre en índice 4, Tiempo en índice 5)
             larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
     return distancia_podio[:3], larga_podio[:3]
 
-# --- WORD GENERATOR (ESTRUCTURA BLINDADA) ---
+# --- WORD GENERATOR (ESTRUCTURA AJUSTADA SEGÚN SOLICITUD) ---
 def crear_tabla(doc, df, cols):
     table = doc.add_table(rows=1, cols=len(cols))
     table.style = 'Light Grid Accent 1'
@@ -127,6 +125,7 @@ def generar_word(df, sem, dist_p, larg_p):
     df_c = df[df['CV'] != 'NC'].copy()
     df_c['CV_n'] = df_c['CV'].astype(float)
     
+    # --- PÁGINA 1: RESUMEN Y TOP 5 ---
     doc.add_heading('🔍 Resumen General', level=2)
     t_m = df['T_Mins'].sum()
     doc.add_paragraph(f'Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {int(t_m//60)}h {int(t_m%60)}m')
@@ -140,7 +139,6 @@ def generar_word(df, sem, dist_p, larg_p):
     plt.savefig(img_s, format='png')
     doc.add_paragraph().add_run().add_picture(img_s, width=Inches(3))
     
-    # TOP 5 COMPLETOS
     doc.add_heading('🏅 TOP 5 TRIATLETAS COMPLETOS', level=2)
     t5 = df_c.sort_values('T_Mins', ascending=False).head(5)
     t5['#'] = range(1, 6)
@@ -150,7 +148,6 @@ def generar_word(df, sem, dist_p, larg_p):
         doc.add_paragraph(f"{r['Tiempo Total']} | {r['Actividades']} act. | {r['Bicicleta']} bici").italic = True
         doc.add_paragraph(generar_comentario(r, t5, 'Completos', r['#']))
 
-    # TOP 5 BALANCEADOS
     doc.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
     b5 = df_c.sort_values('CV_n').head(5)
     b5['#'] = range(1, 6)
@@ -159,27 +156,19 @@ def generar_word(df, sem, dist_p, larg_p):
         doc.add_paragraph(f"{r['#']}. {r['Deportista']} (CV: {r['CV']})").bold = True
         doc.add_paragraph(generar_comentario(r, b5, 'CV', r['#']))
 
-    # TOP 15 GENERAL
-    doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=2)
+    doc.add_heading('🌟 OTRAS CATEGORÍAS', level=2)
+    doc.add_heading('🔄 MAYOR FRECUENCIA (ACTIVIDADES TOTALES)', level=3)
+    for i, r in df.sort_values('Actividades', ascending=False).head(3).iterrows():
+        doc.add_paragraph(f"{r['Deportista']} ({r['Actividades']} sesiones)")
+
+    # --- PÁGINA 2: CLASIFICACIÓN GENERAL ---
+    doc.add_page_break()
+    doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=1)
     t15 = df.sort_values('T_Mins', ascending=False).head(15)
     t15['#'] = range(1, 16)
     crear_tabla(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
 
-    # OTRAS CATEGORÍAS (Llenado automático con OCR)
-    doc.add_heading('🌟 OTRAS CATEGORÍAS DESTACADAS', level=2)
-    doc.add_heading('🔄 MAYOR FRECUENCIA (ACTIVIDADES TOTALES)', level=3)
-    for i, r in df.sort_values('Actividades', ascending=False).head(3).iterrows():
-        doc.add_paragraph(f"{r['Deportista']} ({r['Actividades']} sesiones)")
-        
-    doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=3)
-    for i, p in enumerate(dist_p):
-        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
-
-    doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=3)
-    for i, p in enumerate(larg_p):
-        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
-
-    # DISCIPLINAS (Una por página - BLINDADO)
+    # --- PÁGINAS DE DISCIPLINAS ---
     for disc, col, icono, m_col in [('NATACIÓN', 'Natación', '🏊‍♂️', 'N_Mins'), ('CICLISMO', 'Bicicleta', '🚴', 'B_Mins'), ('TROTE', 'Trote', '🏃‍♂️', 'R_Mins')]:
         doc.add_page_break()
         doc.add_heading(f'{icono} TOP 15 {disc}', level=1)
@@ -189,6 +178,16 @@ def generar_word(df, sem, dist_p, larg_p):
         doc.add_heading('Análisis del Podio:', level=3)
         for i, r in d15.head(3).iterrows():
             doc.add_paragraph(f"{'🥇' if r['#']==1 else '🥈' if r['#']==2 else '🥉'} {r['Deportista']} ({r[col]}): {generar_comentario(r, d15, col, r['#'])}")
+
+    # --- PÁGINA FINAL: PODIOS DE DISTANCIA Y LARGA ---
+    doc.add_page_break()
+    doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1)
+    for i, p in enumerate(dist_p):
+        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
+
+    doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1)
+    for i, p in enumerate(larg_p):
+        doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -204,5 +203,4 @@ if st.button("Generar Reporte Final"):
     if raw.strip() and ocr_input.strip():
         df_semana = parse_raw_data(raw)
         dist_p, larg_p = parse_ocr_data(ocr_input)
-        
         st.download_button("📄 DESCARGAR REPORTE OFICIAL", generar_word(df_semana, sem, dist_p, larg_p), f"Reporte_TYM_Sem_{sem}.docx")
