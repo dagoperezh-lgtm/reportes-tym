@@ -10,11 +10,11 @@ from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (BLINDADO) ---
+# --- 1. CONFIGURACIÓN (BLINDADO) ---
 st.set_page_config(page_title="Plataforma TYM 2026", page_icon="🏆", layout="wide")
-st.title("🏆 Gestión de Reportes y Estadísticas - Club TYM")
+st.title("🏆 Gestión de Estadísticas y Reportes - Club TYM")
 
-# --- 2. UTILIDADES DE PROCESAMIENTO (BLINDADO) ---
+# --- 2. UTILIDADES (BLINDADO) ---
 def clean_string(text):
     if not text: return ""
     text = str(text).strip().upper()
@@ -34,25 +34,24 @@ def to_mins(t_str):
 def to_hhmmss(mins):
     return f"{int(mins // 60):02d}:{int(mins % 60):02d}:00"
 
-# --- 3. MOTOR DE COMENTARIOS (PROTEGIDO - BLOQUEADO) ---
+# --- 3. MOTOR DE COMENTARIOS (BLOQUEADO) ---
 def generar_comentario(row, cat, pos):
     nombre = row['Deportista']
     if cat in ['Completos', 'General']:
-        if pos == 1: return f"Dominio absoluto de {nombre}. Se consolida en la cima del club con un volumen total envidiable, demostrando una preparación de élite y una disciplina inquebrantable."
-        if pos == 2: return f"Una semana brillante para {nombre}. Se queda con la plata manteniendo una presión constante sobre el líder. Su solidez fue el motor que lo mantuvo arriba."
+        if pos == 1: return f"Dominio absoluto de {nombre}. Se consolida en la cima del club con un volumen total envidiable, demostrando una preparación de élite."
+        if pos == 2: return f"Una semana brillante para {nombre}. Se queda con la plata manteniendo una presión constante sobre el líder."
         return f"{nombre} cierra el podio con un rendimiento muy equilibrado. Demuestra que para estar en el grupo de avanzada no se puede regalar nada."
-    if cat == 'CV': return f"¡El reloj suizo del club! {nombre} logra una simetría casi perfecta ({row.get('CV', 0)}), demostrando una planificación milimétrica de sus cargas."
+    if cat == 'CV': return f"¡El reloj suizo del club! {nombre} logra una simetría casi perfecta ({row.get('CV', 0)}), demostrando una planificación milimétrica."
     tiempo = row.get(cat, "")
     if cat == 'Natación': return f"Fuerza pura en el agua. {nombre} registra {tiempo}, liderando el podio con técnica depurada."
-    if cat == 'Bicicleta': return f"Potencia pura sobre ruedas. {nombre} devoró la ruta con {tiempo}, siendo el gran motor del equipo."
-    if cat == 'Trote': return f"Resistencia inalcanzable. {nombre} domina el asfalto con {tiempo} y una fase de carrera soberbia."
+    if cat == 'Bicicleta': return f"Potencia pura sobre ruedas. {nombre} devoró la ruta con {tiempo}."
+    if cat == 'Trote': return f"Resistencia inalcanzable. {nombre} domina el asfalto con {tiempo}."
     return "Desempeño destacado."
 
 # --- 4. PARSERS (BLINDADO) ---
 def parse_raw_data(raw_text):
     data = []
     rank = 1
-    raw_text = raw_text.replace('\xa0', ' ')
     for line in raw_text.strip().split('\n'):
         if not line or 'Deportista' in line: continue
         try:
@@ -76,26 +75,44 @@ def parse_ocr_data(ocr_text):
         if len(p) >= 6:
             n_d, v_d, n_l, v_l = p[2].strip(), p[3].strip(), p[4].strip(), p[5].strip()
             if any(k in n_d for k in keywords) or any(k in n_l for k in keywords): continue
-            if n_d and v_d: dist.append({'nombre': n_d, 'valor': v_d})
-            if n_l and v_l: larg.append({'nombre': n_l, 'valor': v_l})
+            if n_d: dist.append({'nombre': n_d, 'valor': v_d})
+            if n_l: larg.append({'nombre': n_l, 'valor': v_l})
     return dist[:3], larg[:3]
 
-# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO ÚNICO: HOJA SEMANAL) ---
-def crear_hoja_semanal(archivo_maestro, df_actual, num_sem):
+# --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: POSICIÓN DE HOJA) ---
+def crear_hoja_semanal_ordenada(archivo_maestro, df_semana, num_sem):
     xls = pd.ExcelFile(archivo_maestro)
-    hojas_existentes = xls.sheet_names
+    hojas_originales = xls.sheet_names
     nombre_nueva_hoja = f"Sem {num_sem.strip()}"
+    
+    # Determinar el nuevo orden
+    nuevo_orden = []
+    insertada = False
+    
+    for h in hojas_originales:
+        if h == nombre_nueva_hoja: continue # Evitar duplicados
+        # Insertar justo antes de la hoja "CV"
+        if h == "CV" and not insertada:
+            nuevo_orden.append(nombre_nueva_hoja)
+            insertada = True
+        nuevo_orden.append(h)
+    
+    # Si por alguna razón no existe la hoja CV, añadir al final
+    if not insertada:
+        nuevo_orden.append(nombre_nueva_hoja)
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        for hoja in hojas_existentes:
-            if hoja == nombre_nueva_hoja: continue
-            pd.read_excel(xls, sheet_name=hoja).to_excel(writer, sheet_name=hoja, index=False)
-        df_new = df_actual[['#', 'Deportista', 'Tiempo Total', 'Actividades', 'Natación', 'Bicicleta', 'Trote', 'CV']].copy()
-        df_new.rename(columns={'#': 'Clasificación'}, inplace=True)
-        df_new.to_excel(writer, sheet_name=nombre_nueva_hoja, index=False)
+        for hoja in nuevo_orden:
+            if hoja == nombre_nueva_hoja:
+                df_new = df_semana[['#', 'Deportista', 'Tiempo Total', 'Actividades', 'Natación', 'Bicicleta', 'Trote', 'CV']].copy()
+                df_new.rename(columns={'#': 'Clasificación'}, inplace=True)
+                df_new.to_excel(writer, sheet_name=hoja, index=False)
+            else:
+                pd.read_excel(xls, sheet_name=hoja).to_excel(writer, sheet_name=hoja, index=False)
     return output.getvalue()
 
-# --- 6. GENERADOR DE WORD (BLOQUEADO / LOCKER) ---
+# --- 6. GENERADOR DE WORD (BLOQUEADO) ---
 def aplicar_estilo(p, size, bold=False, center=False):
     run = p.runs[0] if p.runs else p.add_run()
     run.font.name = 'Calibri'; run.font.size = Pt(size); run.bold = bold
@@ -106,8 +123,7 @@ def crear_tabla_centrada(doc, df, cols):
     table.style = 'Light Grid Accent 1'; table.alignment = 1; table.autofit = False
     anchos = {'#': 0.4, 'Deportista': 2.8, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.6}
     for i, c in enumerate(cols):
-        cell = table.rows[0].cells[i]; cell.text = c
-        cell.width = Inches(anchos.get(c, 0.7))
+        cell = table.rows[0].cells[i]; cell.text = c; cell.width = Inches(anchos.get(c, 0.7))
         aplicar_estilo(cell.paragraphs[0], 9, True, True)
     for _, row in df.iterrows():
         row_cells = table.add_row().cells
@@ -118,10 +134,8 @@ def crear_tabla_centrada(doc, df, cols):
 
 def generar_word(df, sem, dist_p, larg_p):
     doc = Document()
-    t = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0)
-    aplicar_estilo(t, 20, True, True); doc.add_paragraph()
-    p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
-    aplicar_estilo(p_intro, 11, True, True); doc.add_paragraph()
+    t = doc.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {sem}', 0); aplicar_estilo(t, 20, True, True); doc.add_paragraph()
+    p_intro = doc.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"'); aplicar_estilo(p_intro, 11, True, True); doc.add_paragraph()
     h1 = doc.add_heading('🔍 Resumen General', level=2); aplicar_estilo(h1, 15, True); doc.add_paragraph()
     df_c = df[df['CV'] != 'NC'].copy(); t_m = df['T_Mins'].sum()
     p_res = doc.add_paragraph(f"Total deportistas: {len(df)}\nTriatletas completos: {len(df_c)}\nHoras totales: {to_hhmmss(t_m)}"); aplicar_estilo(p_res, 11)
@@ -145,8 +159,7 @@ def generar_word(df, sem, dist_p, larg_p):
         for _, r in d15.head(3).iterrows():
             p_p = doc.add_paragraph(f"{'🥇' if r['#']==1 else '🥈' if r['#']==2 else '🥉'} {r['Deportista']}"); aplicar_estilo(p_p, 11, True)
             doc.add_paragraph(generar_comentario(r, col_t if col_t != 'Tiempo Total' else 'General', r['#']))
-    doc.add_page_break()
-    h5 = doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_estilo(h5, 15, True); doc.add_paragraph()
+    doc.add_page_break(); h5 = doc.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_estilo(h5, 15, True); doc.add_paragraph()
     for i, p in enumerate(dist_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']} km)")
     doc.add_paragraph(); h6 = doc.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1); aplicar_estilo(h6, 15, True); doc.add_paragraph()
     for i, p in enumerate(larg_p): doc.add_paragraph(f"{i+1}. {p['nombre']} ({p['valor']})")
@@ -154,15 +167,15 @@ def generar_word(df, sem, dist_p, larg_p):
 
 # --- 7. INTERFAZ ---
 archivo_maestro = st.sidebar.file_uploader("Subir Archivo 00 Estadísticas (Excel)", type=["xlsx"])
-sem_num = st.text_input("Número de Semana:", "08")
+sem_num = st.text_input("Número de Semana (Ej: 08):", "08")
 raw_data = st.text_area("1. Datos Tiempo Total:")
-ocr_input = st.text_area("2. Datos OCR (Traducción Captura):")
+ocr_input = st.text_area("2. Datos OCR (Captura):")
 
 if st.button("PROCESAR JORNADA COMPLETA"):
     if raw_data.strip() and ocr_input.strip() and archivo_maestro:
         df_sem = parse_raw_data(raw_data)
         dist_p, larg_p = parse_ocr_data(ocr_input)
-        st.success("¡Proceso completado exitosamente!")
+        st.success("¡Proceso completado!")
         c1, c2 = st.columns(2)
-        c1.download_button("📄 REPORTE WORD (Calibri)", generar_word(df_sem, sem_num, dist_p, larg_p), f"Reporte_TYM_{sem_num}.docx")
-        c2.download_button("📊 EXCEL ACTUALIZADO (Hoja Semanal)", crear_hoja_semanal(archivo_maestro, df_sem, sem_num), "00_Estadisticas_Actualizado.xlsx")
+        c1.download_button("📄 REPORTE WORD", generar_word(df_sem, sem_num, dist_p, larg_p), f"Reporte_TYM_{sem_num}.docx")
+        c2.download_button("📊 EXCEL ACTUALIZADO", crear_hoja_semanal_ordenada(archivo_maestro, df_sem, sem_num), "00_Estadisticas_Actualizado.xlsx")
