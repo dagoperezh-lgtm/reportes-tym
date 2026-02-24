@@ -2,5 +2,6 @@ streamlit
 pandas
 numpy
 plotly
+matplotlib
 python-docx
 openpyxl
