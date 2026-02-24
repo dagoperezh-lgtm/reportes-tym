@@ -14,6 +14,8 @@ st.set_page_config(page_title="Inteligencia TYM", page_icon="🏆", layout="wide
 
 st.title("🏆 Plataforma de Inteligencia Deportiva - TYM")
 
+HISTORICO_FILE = "historico_tym.csv"
+
 # --- UTILIDADES DE TIEMPO (BLINDADO) ---
 def to_mins(t_str):
     if pd.isna(t_str) or '--:--' in t_str or not t_str: return 0
@@ -85,19 +87,26 @@ def parse_ocr_data(ocr_text):
             larga_podio.append({'nombre': parts[4].strip(), 'valor': parts[5].strip()})
     return distancia_podio[:3], larga_podio[:3]
 
-# --- NUEVA FUNCIÓN: GESTIÓN DE EXCEL E HISTÓRICO ---
+# --- GESTIÓN DE EXCEL (CORREGIDO PARA KEYERROR) ---
 def actualizar_excel_historico(df_actual, df_hist_previo, num_sem):
     col_nueva = f"Sem {num_sem}"
     df_nueva = df_actual[['Deportista', 'T_Mins']].rename(columns={'Deportista': 'Nombre', 'T_Mins': col_nueva})
     
     if df_hist_previo is not None:
+        # Normalizamos nombres de columnas del archivo subido para evitar el KeyError
+        df_hist_previo.columns = [str(c).strip().capitalize() for c in df_hist_previo.columns]
+        
+        # Si la columna "Nombre" no existe bajo ese nombre, buscamos la primera que contenga texto
+        if 'Nombre' not in df_hist_previo.columns:
+            df_hist_previo.rename(columns={df_hist_previo.columns[0]: 'Nombre'}, inplace=True)
+            
         if col_nueva in df_hist_previo.columns:
             df_hist_previo = df_hist_previo.drop(columns=[col_nueva])
+            
         df_final = pd.merge(df_hist_previo, df_nueva, on='Nombre', how='outer').fillna(0)
     else:
         df_final = df_nueva
     
-    # Calcular Acumulado Total
     cols_sem = [c for c in df_final.columns if "Sem" in c]
     df_final['Total Acumulado (mins)'] = df_final[cols_sem].sum(axis=1)
     df_final['Total Formateado'] = df_final['Total Acumulado (mins)'].apply(to_hhmmss)
@@ -148,12 +157,12 @@ def generar_word(df, sem, dist_p, larg_p):
     aplicar_estilo(p_res, 11)
     fig, ax = plt.subplots(figsize=(4,4))
     ax.pie([df['N_Mins'].sum(), df['B_Mins'].sum(), df['R_Mins'].sum()], labels=['Nat', 'Bici', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
-    img_s = io.BytesIO()
-    plt.savefig(img_s, format='png', bbox_inches='tight')
+    img_stream = io.BytesIO()
+    plt.savefig(img_stream, format='png', bbox_inches='tight')
     plt.close(fig)
     p_img = doc.add_paragraph()
     p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_img.add_run().add_picture(img_s, width=Inches(3.5))
+    p_img.add_run().add_picture(img_stream, width=Inches(3.5))
     h2 = doc.add_heading('🏅 TOP 5 TRIATLETAS COMPLETOS', level=2)
     aplicar_estilo(h2, 15, True)
     doc.add_paragraph()
@@ -165,8 +174,7 @@ def generar_word(df, sem, dist_p, larg_p):
     for i, r in t5.iterrows():
         p = doc.add_paragraph(f"{r['#']}. {r['Deportista']}")
         aplicar_estilo(p, 11, True)
-        p_com = doc.add_paragraph(generar_comentario(r, t5, 'Completos', r['#']))
-        aplicar_estilo(p_com, 11)
+        doc.add_paragraph(generar_comentario(r, t5, 'Completos', r['#']))
     h3 = doc.add_heading('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', level=2)
     aplicar_estilo(h3, 15, True)
     doc.add_paragraph()
@@ -179,12 +187,10 @@ def generar_word(df, sem, dist_p, larg_p):
     for i, r in b5.iterrows():
         p = doc.add_paragraph(f"{r['#']}. {r['Deportista']} (CV: {r['CV']})")
         aplicar_estilo(p, 11, True)
-        p_com = doc.add_paragraph(generar_comentario(r, b5, 'CV', r['#']))
-        aplicar_estilo(p_com, 11)
+        doc.add_paragraph(generar_comentario(r, b5, 'CV', r['#']))
     doc.add_page_break()
     h4 = doc.add_heading('🥇 TOP 15 TIEMPO TOTAL GENERAL', level=1)
-    aplicar_estilo(h4, 15, True)
-    doc.add_paragraph()
+    aplicar_estilo(h4, 15, True); doc.add_paragraph()
     t15 = df.sort_values('T_Mins', ascending=False).head(15).copy()
     t15['#'] = range(1, 16)
     crear_tabla_centrada(doc, t15, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
@@ -197,8 +203,7 @@ def generar_word(df, sem, dist_p, larg_p):
     for disc, col, icono, m_col in [('NATACIÓN', 'Natación', '🏊‍♂️', 'N_Mins'), ('CICLISMO', 'Bicicleta', '🚴', 'B_Mins'), ('TROTE', 'Trote', '🏃‍♂️', 'R_Mins')]:
         doc.add_page_break()
         hd = doc.add_heading(f'{icono} TOP 15 {disc}', level=1)
-        aplicar_estilo(hd, 15, True)
-        doc.add_paragraph()
+        aplicar_estilo(hd, 15, True); doc.add_paragraph()
         d15 = df[df[m_col]>0].sort_values(m_col, ascending=False).head(15).copy()
         d15['#'] = range(1, len(d15)+1)
         crear_tabla_centrada(doc, d15, ['#', 'Deportista', col, 'Tiempo Total'])
@@ -216,33 +221,29 @@ def generar_word(df, sem, dist_p, larg_p):
     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
     return buf
 
-# --- INTERFAZ USUARIO ---
+# --- UI ---
 st.sidebar.header("📁 Gestión de Historial")
-archivo_hist_cargado = st.sidebar.file_uploader("Subir Excel de Historial (Opcional)", type=["xlsx", "csv"])
+archivo_hist_cargado = st.sidebar.file_uploader("Subir Excel de Historial", type=["xlsx", "csv"])
 
-sem_ui = st.text_input("Semana (Ej: 08):", "08")
-raw_ui = st.text_area("Datos Tiempo Total:")
-ocr_ui = st.text_area("Datos OCR Captura:")
+sem_ui = st.text_input("Número de Semana:", "08")
+raw_ui = st.text_area("1. Datos Tiempo Total:")
+ocr_ui = st.text_area("2. Datos OCR Captura:")
 
-if st.button("Generar Reporte y Actualizar Excel"):
+if st.button("Generar Reporte Final"):
     if raw_ui.strip() and ocr_ui.strip():
         df_res = parse_raw_data(raw_ui)
         dist_p, larg_p = parse_ocr_data(ocr_ui)
         
-        # Procesar Historial
         df_hist_previo = None
         if archivo_hist_cargado:
             df_hist_previo = pd.read_excel(archivo_hist_cargado) if archivo_hist_cargado.name.endswith('xlsx') else pd.read_csv(archivo_hist_cargado)
         
         df_hist_final = actualizar_excel_historico(df_res, df_hist_previo, sem_ui)
         
-        # Botones de descarga
-        st.success("¡Reporte y Excel histórico generados!")
+        st.success("¡Todo generado!")
         col1, col2 = st.columns(2)
-        
-        word_buf = generar_word(df_res, sem_ui, dist_p, larg_p)
-        col1.download_button("📄 DESCARGAR REPORTE WORD", word_buf, f"Reporte_TYM_{sem_ui}.docx")
+        col1.download_button("📄 DESCARGAR REPORTE WORD", generar_word(df_res, sem_ui, dist_p, larg_p), f"Reporte_TYM_{sem_ui}.docx")
         
         excel_buf = io.BytesIO()
         df_hist_final.to_excel(excel_buf, index=False)
-        col2.download_button("📊 DESCARGAR EXCEL HISTÓRICO", excel_buf.getvalue(), f"Historial_TYM_Actualizado_{sem_ui}.xlsx")
+        col2.download_button("📊 DESCARGAR EXCEL HISTÓRICO", excel_buf.getvalue(), f"Historial_TYM_Sem_{sem_ui}.xlsx")
