@@ -766,8 +766,17 @@ if st.session_state.get('procesado_ok'):
         h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
         dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
         
+        # --- LÓGICA DE SELECCIÓN MASIVA ---
         atletas_list = df_resultados['Deportista'].tolist()
-        seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_list)
+        
+        # Agregamos un checkbox para seleccionar a todos de un solo clic
+        seleccionar_todos = st.checkbox("Seleccionar TODOS los atletas")
+        
+        if seleccionar_todos:
+            seleccionados = st.multiselect("Atletas para reporte personal:", atletas_list, default=atletas_list)
+        else:
+            seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_list)
+        # ----------------------------------
         
         if seleccionados:
             zip_buffer = io.BytesIO()
