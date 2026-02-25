@@ -151,10 +151,9 @@ def to_hhmmss_display(minutos_totales_input):
     
     return string_formato_reloj
 
-# *****************************************************************************
-# --- 3. MOTOR DE COMENTARIOS TÉCNICOS (PROTEGIDO - BLOQUEADO) ---
-# *****************************************************************************
-
+# =============================================================================
+# SECCIÓN 3: MOTOR NARRATIVO PRO CHILE (V2.2.28 - 20+ FRASES POR SECCIÓN)
+# =============================================================================
 import random
 
 # Diccionario global para persistencia de frases durante la ejecución
@@ -162,8 +161,9 @@ PILAS_COMENTARIOS = {}
 
 def obtener_frase_base(categoria, pool_frases):
     """Maneja el barajado de frases para garantizar 0 repeticiones."""
+    global PILAS_COMENTARIOS
     if categoria not in PILAS_COMENTARIOS or not PILAS_COMENTARIOS[categoria]:
-        temp_pool = pool_frases.copy()
+        temp_pool = [str(f) for f in pool_frases] # Forzamos a string para evitar TypeErrors
         random.shuffle(temp_pool)
         PILAS_COMENTARIOS[categoria] = temp_pool
     return PILAS_COMENTARIOS[categoria].pop()
@@ -173,8 +173,8 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     Motor de Narrativa Pro Chile: 20+ variantes por sección.
     Léxico corregido (piscina) e inyección dinámica de identidad.
     """
-    atleta_actual = datos_de_fila['Deportista']
-    tiempo_actual = datos_de_fila.get(nombre_categoria, "00:00:00")
+    atleta_actual = str(datos_de_fila.get('Deportista', 'Atleta TYM'))
+    tiempo_actual = str(datos_de_fila.get(nombre_categoria, "00:00:00"))
     
     # --- BANCO DE NARRATIVA CHILENA (20-25 FRASES POR SECCIÓN) ---
     pools = {
@@ -285,12 +285,12 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     if cat_key not in pools:
         return f"Desempeño consistente de {atleta_actual} en {nombre_categoria}."
 
-    frase_plantilla = obtener_frase_base(cat_key, pools[cat_key])
+    frase_plantilla = str(obtener_frase_base(cat_key, pools[cat_key]))
     
-    # INYECCIÓN FINAL: Reemplazo explícito de placeholders
+    # REEMPLAZO DINÁMICO (Seguro contra duplicidad)
     comentario_final = frase_plantilla.replace("{atleta}", atleta_actual).replace("{tiempo}", tiempo_actual)
     
-    # Distinción para el 1er lugar del Ranking General
+    # Distinción Líder
     if rank_posicion == 1 and cat_key == 'General':
         comentario_final = f"🏆 {comentario_final.replace(atleta_actual, f'nuestro líder {atleta_actual}')}"
     
