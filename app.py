@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import re
 import io
+import zipfile
 import unicodedata
 import matplotlib.pyplot as plt
 from datetime import time, datetime, timedelta
@@ -642,7 +643,67 @@ def generar_reporte_word_tym_completo(df_semanal_datos, num_sem_texto, podio_d_l
     for idx_l_f, item_l_f in enumerate(podio_l_lista): documento_final_word.add_paragraph(f"{idx_l_f+1}. {item_l_f['nombre']} ({item_l_f['valor']})")
     
     stream_salida_word = io.BytesIO(); documento_final_word.save(stream_salida_word); stream_salida_word.seek(0); return stream_salida_word
+    
+# --- NUEVA FUNCIÓN: MOTOR NARRATIVO INDIVIDUAL (MODO INYECCIÓN) ---
+def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos, sem_n):
+    """Genera reporte personal con insights narrativos basados en Colab V17.0."""
+    doc_p = Document()
+    match_key = clean_string(atleta_nom)
+    
+    # Header Personalizado
+    p_h = doc_p.add_heading(f'Análisis de Rendimiento Personal: {atleta_nom}', 0)
+    aplicar_formato_tym_word(p_h, 18, True, True)
+    doc_p.add_paragraph(f"Semana de Entrenamiento: {sem_n}").alignment = 1
+    
+    # Localizar fila actual
+    df_actual['MatchKey'] = df_actual['Deportista'].apply(clean_string)
+    row_act = df_actual[df_actual['MatchKey'] == match_key]
+    if row_act.empty: return None
+    row_act = row_act.iloc[0]
 
+    def get_benchmarks(hoja_key, match_k):
+        df_h = dict_historicos.get(hoja_key)
+        if df_h is None: return 0, 0
+        df_h['MatchKey'] = df_h.iloc[:, 0].astype(str).apply(clean_string)
+        cols_sem = [c for c in df_h.columns if str(c).startswith("Sem ")]
+        # Promedio del Equipo en esta semana
+        prefijo = "N" if "Natación" in hoja_key else "B" if "Ciclismo" in hoja_key else "R" if "Trote" in hoja_key else "T"
+        avg_equipo = df_actual[f"{prefijo}_Mins"].mean()
+        # Promedio Histórico del Atleta
+        r_atleta = df_h[df_h['MatchKey'] == match_k]
+        avg_hist = r_atleta[cols_sem].mean(axis=1).iloc[0] * 1440 if not r_atleta.empty else 0
+        return avg_equipo, avg_hist
+
+    # Bloques de Disciplina
+    for tit_m, hoja_m, col_m in [("TIEMPO TOTAL", "Tiempo Total", "T_Mins"), ("NATACIÓN", "Natación", "N_Mins"), ("CICLISMO", "Ciclismo", "B_Mins"), ("TROTE", "Trote", "R_Mins")]:
+        doc_p.add_heading(tit_m, level=1)
+        val_act = row_act[col_m]
+        bench_eq, bench_hi = get_benchmarks(hoja_m, match_key)
+        
+        p_m = doc_p.add_paragraph()
+        p_m.add_run(f"Volumen actual: {to_hhmmss_display(val_act)}\n").bold = True
+        
+        diff_eq = val_act - bench_eq
+        txt_eq = f"Vs Equipo: {to_hhmmss_display(abs(diff_eq))} {'MÁS' if diff_eq > 0 else 'MENOS'}."
+        run_eq = p_m.add_run(txt_eq)
+        # Verde si es positivo, rojo si es negativo
+        from docx.shared import RGBColor
+        run_eq.font.color.rgb = RGBColor(0, 100, 0) if diff_eq >= 0 else RGBColor(180, 0, 0)
+        
+        diff_hi = val_act - bench_hi
+        p_m.add_run(f"\nVs Tu Media Histórica: {to_hhmmss_display(abs(diff_hi))} {'MÁS' if diff_hi > 0 else 'MENOS'}.")
+
+    # Gráfico Personal
+    fig_p, ax_p = plt.subplots(figsize=(5,3))
+    ax_p.bar(['Nat', 'Bici', 'Tro'], [row_act['N_Mins'], row_act['B_Mins'], row_act['R_Mins']], color=['#1E90FF', '#32CD32', '#FF4500'])
+    ax_p.set_title("Tu Distribución de Carga (Minutos)")
+    buf_p = io.BytesIO(); plt.savefig(buf_p, format='png', bbox_inches='tight'); plt.close(fig_p)
+    doc_p.add_paragraph().add_run().add_picture(buf_p, width=Inches(3.5))
+    
+    doc_p.add_paragraph("─" * 50)
+    doc_p.add_paragraph("Generado por Agente TYM 2026").alignment = 2
+    b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
+    
 # *****************************************************************************
 # --- 7. INTERFAZ DE USUARIO (STREMLIT) ---
 # *****************************************************************************
@@ -665,5 +726,33 @@ if st.button("🚀 PROCESAR JORNADA"):
         
         # Excel
         col2.download_button(label="📊 EXCEL ACTUALIZADO", data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
+# --- INYECCIÓN DE INTERFAZ PARA REPORTES INDIVIDUALES ---
+        st.divider()
+        st.subheader("👤 Generador de Insights Individuales")
+        
+        # Cargamos los datos históricos necesarios para la comparativa
+        h_t = pd.read_excel(maestro_uploader, sheet_name="Tiempo Total", dtype=object)
+        h_n = pd.read_excel(maestro_uploader, sheet_name="Natación", dtype=object)
+        h_c = pd.read_excel(maestro_uploader, sheet_name="Ciclismo", dtype=object)
+        h_r = pd.read_excel(maestro_uploader, sheet_name="Trote", dtype=object)
+        dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
+        
+        atletas_list = df_res['Deportista'].tolist()
+        seleccionados = st.multiselect("Seleccionar Atletas para Reporte Individual:", atletas_list)
+        
+        if seleccionados:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for a_sel in seleccionados:
+                    r_indiv = generar_reporte_narrativo_individual(a_sel, df_res, dict_h_ref, input_num_semana)
+                    if r_indiv:
+                        zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
+            
+            st.download_button(
+                label="⬇️ DESCARGAR ZIP INDIVIDUALES", 
+                data=zip_buffer.getvalue(), 
+                file_name=f"Individuales_Sem_{input_num_semana}.zip", 
+                mime="application/zip"
+            )
     else:
         st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
