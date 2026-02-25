@@ -766,17 +766,21 @@ if st.session_state.get('procesado_ok'):
         h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
         dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
         
-        # --- LÓGICA DE SELECCIÓN MASIVA ---
-        atletas_list = df_resultados['Deportista'].tolist()
+       # --- LÓGICA DE SELECCIÓN FILTRADA POR ACTIVIDAD ---
+        # Filtramos solo a los atletas que sumaron minutos en la semana actual
+        df_activos = df_resultados[df_resultados['T_Mins'] > 0]
+        atletas_activos_list = df_activos['Deportista'].tolist()
         
-        # Agregamos un checkbox para seleccionar a todos de un solo clic
-        seleccionar_todos = st.checkbox("Seleccionar TODOS los atletas")
+        st.write(f"ℹ️ Se detectaron {len(atletas_activos_list)} atletas con actividad esta semana.")
+        
+        # Checkbox para selección masiva de activos
+        seleccionar_todos = st.checkbox(f"Seleccionar los {len(atletas_activos_list)} atletas activos")
         
         if seleccionar_todos:
-            seleccionados = st.multiselect("Atletas para reporte personal:", atletas_list, default=atletas_list)
+            seleccionados = st.multiselect("Atletas para reporte personal:", atletas_activos_list, default=atletas_activos_list)
         else:
-            seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_list)
-        # ----------------------------------
+            seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_activos_list)
+        # --------------------------------------------------
         
         if seleccionados:
             zip_buffer = io.BytesIO()
