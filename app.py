@@ -157,86 +157,69 @@ def to_hhmmss_display(minutos_totales_input):
 
 import random
 
+# Diccionario global para gestionar las "pilas" de comentarios y evitar repeticiones
+PILAS_COMENTARIOS = {}
+
+def obtener_frase_unica(categoria, pool_frases):
+    """Asegura que no se repita una frase hasta agotar el pool."""
+    if categoria not in PILAS_COMENTARIOS or not PILAS_COMENTARIOS[categoria]:
+        random.shuffle(pool_frases)
+        PILAS_COMENTARIOS[categoria] = pool_frases.copy()
+    return PILAS_COMENTARIOS[categoria].pop()
+
 def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     """
-    Genera comentarios inteligentes con alta variabilidad narrativa.
-    Utiliza pools de frases por condición para evitar el desgaste del lenguaje.
+    Genera narrativa técnica orgánica basada en el perfil del atleta.
+    Usa un sistema de pilas (stack) para garantizar cero repeticiones por sección.
     """
     atleta = datos_de_fila['Deportista']
-    
-    # --- LÓGICA PARA VOLUMEN (COMPLETOS / GENERAL) ---
-    if nombre_categoria in ['Completos', 'General']:
-        mins = datos_de_fila.get('T_Mins', 0)
-        
-        if rank_posicion == 1:
-            opciones = [
-                f"Liderazgo indiscutible de {atleta}. Su volumen semanal marca el paso del club y establece un estándar de alto rendimiento.",
-                f"Dominio absoluto de {atleta}. Estar en la cima de la tabla general es reflejo de una disciplina y capacidad de carga superiores.",
-                f"{atleta} se consolida como el referente de la semana. Su constancia en las tres áreas lo sitúa en una posición de privilegio.",
-                f"Rendimiento de punta para {atleta}. Encabezar el ranking semanal demuestra una preparación física y mental de primer nivel."
-            ]
-            return random.choice(opciones)
-            
-        if mins > 600: # +10 horas
-            opciones = [
-                f"Semana de alto impacto para {atleta}. Romper la barrera de las 10 horas es un hito reservado para la base más sólida del equipo.",
-                f"Volumen extraordinario de {atleta}. Esta carga de trabajo es la que construye la resiliencia necesaria para la larga distancia.",
-                f"{atleta} demuestra una capacidad de asimilación de carga notable, superando las 10 horas con una consistencia admirable.",
-                f"Compromiso total de {atleta}. Acumular este minutaje neto es señal de una planificación ambiciosa y bien ejecutada."
-            ]
-            return random.choice(opciones)
-            
-        return f"Desempeño equilibrado de {atleta}. Se mantiene en la zona de honor gracias a una gestión inteligente de sus sesiones semanales."
-
-    # --- LÓGICA PARA BALANCE (CV) ---
-    if nombre_categoria == 'CV':
-        cv_val = datos_de_fila.get('CV', 0)
-        if cv_val < 0.20:
-            opciones = [
-                f"Simetría de élite. {atleta} logra un equilibrio casi perfecto (CV: {cv_val}), demostrando que es un triatleta integral.",
-                f"Precisión técnica absoluta. {atleta} distribuye su esfuerzo con exactitud suiza en las tres disciplinas.",
-                f"Control magistral de las cargas. {atleta} no descuida ningún frente, logrando una paridad envidiable entre agua, bici y trote.",
-                f"Arquitectura de entrenamiento perfecta. {atleta} refleja la filosofía TYM: equilibrio total para un rendimiento sostenido."
-            ]
-            return random.choice(opciones)
-        elif cv_val < 0.45:
-            opciones = [
-                f"Gran balance estratégico. {atleta} mantiene sus métricas bajo control, asegurando un desarrollo armónico en todas las áreas.",
-                f"Polivalencia destacada de {atleta}. Su bajo coeficiente de variación es garantía de un progreso sólido y sin puntos débiles.",
-                f"Consistencia multitarea. {atleta} demuestra madurez deportiva al gestionar sus tiempos con un balance técnico sobresaliente.",
-                f"Gestión inteligente de {atleta}. Lograr este nivel de equilibrio facilita la transición y mejora el performance global."
-            ]
-            return random.choice(opciones)
-        return f"{atleta} muestra una base versátil. Su presencia en el ranking de balance indica un esfuerzo consciente por ser un deportista completo."
-
-    # --- LÓGICA POR DISCIPLINA ---
     tiempo = datos_de_fila.get(nombre_categoria, "00:00:00")
     
-    if nombre_categoria == 'Natación':
-        opciones = [
-            f"Fuerza hidrodinámica. {atleta} registra {tiempo} en el agua, liderando la fase más técnica con solvencia.",
-            f"Dominio en la pileta. Los {tiempo} de {atleta} son fruto de una técnica depurada y un volumen de brazada consistente.",
-            f"{atleta} marca la pauta acuática de la semana. Su progresión en el agua es un pilar clave en su evolución actual."
+    # 1. DEFINICIÓN DE POOLS NARRATIVOS (Personalidad de Coach)
+    pools = {
+        'General': [
+            f"La constancia de {atleta} es el motor del club; liderar con este volumen es pura disciplina.",
+            f"Semana de consolidación para {atleta}. No solo es cantidad, es la calidad del tiempo acumulado.",
+            f"El compromiso de {atleta} se refleja en cada minuto. Un pilar fundamental en el ranking esta semana.",
+            f"Rendimiento de alto nivel. {atleta} entiende que la base del éxito es este volumen sostenido.",
+            f"Impresionante despliegue de {atleta}. Gestionar estas cargas requiere una madurez deportiva superior."
+        ],
+        'CV': [
+            f"Equilibrio milimétrico. {atleta} entrena con la precisión de quien no deja nada al azar.",
+            f"La polivalencia de {atleta} es su mayor ventaja competitiva. Simetría total en las tres áreas.",
+            f"Control de carga magistral. {atleta} distribuye su energía de forma inteligente y balanceada.",
+            f"Triatlón en estado puro: {atleta} demuestra que dominar la transición es dominar el equilibrio.",
+            f"Eficiencia técnica destacada. {atleta} logra que el balance parezca sencillo, pero es pura planificación."
+        ],
+        'Natación': [
+            f"Fluidez y potencia. Los {tiempo} de {atleta} en el agua son el cimiento de una gran base aeróbica.",
+            f"Dominio del medio acuático. {atleta} marca la pauta con un volumen técnico de {tiempo} muy sólido.",
+            f"{atleta} se convierte en el referente de la pileta esta semana, sumando calidad en cada brazada."
+        ],
+        'Bicicleta': [
+            f"Kilometraje de calidad. {atleta} construye su fortaleza sobre los pedales con {tiempo} de rodaje neto.",
+            f"El gran motor del equipo. {atleta} asimila la carga de ciclismo con una resiliencia envidiable.",
+            f"Potencia y fondo. {atleta} devoró la ruta esta semana, demostrando una preparación física superior."
+        ],
+        'Trote': [
+            f"Zancada resiliente. Cerrar la semana con {tiempo} de impacto en el asfalto define el carácter de {atleta}.",
+            f"Resistencia específica. {atleta} domina la fase de carrera con una gestión de fatiga admirable.",
+            f"Persistencia técnica. {atleta} asimila el volumen de running con maestría, fortaleciendo su base de cierre."
         ]
-        return random.choice(opciones)
-        
-    if nombre_categoria == 'Bicicleta':
-        opciones = [
-            f"Potencia sobre ruedas. {atleta} devoró kilómetros esta semana sumando {tiempo} de rodaje de alta calidad.",
-            f"El gran motor del equipo. {atleta} construye su resistencia desde el pedal con un volumen de {tiempo} envidiable.",
-            f"Solidez en el ciclismo. {atleta} aprovecha cada sesión para fortalecer el segmento de mayor duración con {tiempo} netos."
-        ]
-        return random.choice(opciones)
-        
-    if nombre_categoria == 'Trote':
-        opciones = [
-            f"Resistencia en el asfalto. {atleta} cierra la jornada con {tiempo} de carrera, demostrando una base aeróbica inalcanzable.",
-            f"Zancada de hierro. {atleta} domina la fase de carrera con {tiempo} de volumen, vital para los cierres de carrera.",
-            f"Persistencia técnica. {atleta} asimila la carga de running con maestría, registrando {tiempo} de impacto controlado."
-        ]
-        return random.choice(opciones)
+    }
 
-    return f"Desempeño destacado de {atleta} en la categoría de {nombre_categoria}."
+    # 2. SELECCIÓN DE CATEGORÍA LÓGICA
+    cat_key = 'General' if nombre_categoria in ['Completos', 'General'] else nombre_categoria
+    if cat_key not in pools: return f"Desempeño consistente de {atleta} en {nombre_categoria}."
+
+    # 3. EXTRACCIÓN DE FRASE ÚNICA Y PERSONALIZACIÓN
+    frase_base = obtener_frase_unica(cat_key, pools[cat_key])
+    
+    # Personalización extra para el 1er lugar del ranking general
+    if rank_posicion == 1 and cat_key == 'General':
+        return f"🏆 {frase_base.replace(atleta, f'nuestro líder {atleta}')}"
+    
+    return frase_base
 
 # *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
