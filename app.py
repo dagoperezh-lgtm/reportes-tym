@@ -645,7 +645,7 @@ def generar_reporte_word_tym_completo(df_semanal_datos, num_sem_texto, podio_d_l
     stream_salida_word = io.BytesIO(); documento_final_word.save(stream_salida_word); stream_salida_word.seek(0); return stream_salida_word
 
 # =============================================================================
-# SECCIÓN INYECTADA: MOTOR NARRATIVO INDIVIDUAL (ESTILO COLAB V17.0)
+# SECCIÓN INYECTADA: MOTOR NARRATIVO INDIVIDUAL (ESTILO COLAB V17.0 - FIX NUMÉRICO)
 # =============================================================================
 def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos, sem_n):
     """Genera reporte personal con insights narrativos basados en Colab V17.0."""
@@ -667,15 +667,24 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
         df_h = dict_historicos.get(hoja_key)
         if df_h is None: return 0, 0
         df_h['MatchKey'] = df_h.iloc[:, 0].astype(str).apply(clean_string)
+        
+        # Identificar columnas de semanas (ej: "Sem 01", "Sem 02")
         cols_sem = [c for c in df_h.columns if str(c).startswith("Sem ")]
         
-        # Mapeo de prefijos para promedio del equipo
+        # Promedio del Equipo (Mins actuales)
         prefijo = "N" if "Natación" in hoja_key else "B" if "Ciclismo" in hoja_key else "R" if "Trote" in hoja_key else "T"
         avg_equipo = df_actual[f"{prefijo}_Mins"].mean()
         
-        # Promedio Histórico del Atleta
+        # --- FIX DE SEGURIDAD PARA PROMEDIO HISTÓRICO ---
         r_atleta = df_h[df_h['MatchKey'] == match_k]
-        avg_hist = r_atleta[cols_sem].mean(axis=1).iloc[0] * 1440 if not r_atleta.empty else 0
+        if not r_atleta.empty:
+            # Extraemos la fila de semanas y forzamos a que todo sea número (lo no numérico será NaN)
+            datos_semanas = pd.to_numeric(r_atleta[cols_sem].iloc[0], errors='coerce')
+            # Calculamos el promedio ignorando los NaN
+            avg_hist = datos_semanas.mean() * 1440 if not pd.isna(datos_semanas.mean()) else 0
+        else:
+            avg_hist = 0
+            
         return avg_equipo, avg_hist
 
     # Construcción de comparativas por disciplina
