@@ -707,7 +707,7 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
-# --- 7. INTERFAZ DE USUARIO (STREMLIT) ---
+# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
 # *****************************************************************************
 
 st.sidebar.header("📁 Gestión de Datos Históricos TYM")
@@ -716,22 +716,41 @@ num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
 area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):")
 area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
 
+# Contenedor para mantener los resultados visibles tras la interacción
+contenedor_resultados = st.container()
+
 if st.button("🚀 PROCESAR JORNADA"):
     if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
-        # 1. Procesamiento de datos base (Parsing)
-        df_resultados = parse_raw_data(area_texto_strava)
-        d_p_dist, d_p_larg = parse_ocr_data(area_texto_ocr)
-        st.success(f"¡Semana {num_semana_procesar} procesada!"); col1, col2 = st.columns(2)
+        # Procesar Parsing y guardarlo en el estado de la sesión para persistencia
+        st.session_state['df_resultados'] = parse_raw_data(area_texto_strava)
+        st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
+        st.session_state['procesado_ok'] = True
+    else:
+        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
+
+# Lógica de despliegue fuera del botón para que no desaparezca al interactuar
+if st.session_state.get('procesado_ok'):
+    df_resultados = st.session_state['df_resultados']
+    d_p_dist, d_p_larg = st.session_state['podios_ocr']
+    
+    with contenedor_resultados:
+        st.success(f"¡Semana {num_semana_procesar} procesada!")
+        col1, col2 = st.columns(2)
         
-        # 2. Descargas Grupales (Word y Excel)
-        col1.download_button(label="📄 REPORTE WORD GRUPAL", data=generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), file_name=f"Reporte_TYM_{num_semana_procesar}.docx")
-        col2.download_button(label="📊 EXCEL ACTUALIZADO", data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
+        # 1. Descargas Grupales
+        col1.download_button(label="📄 REPORTE WORD GRUPAL", 
+                             data=generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), 
+                             file_name=f"Reporte_TYM_{num_semana_procesar}.docx")
         
-        # 3. Sección de Insights Individuales
+        col2.download_button(label="📊 EXCEL ACTUALIZADO", 
+                             data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), 
+                             file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
+        
+        # 2. Sección de Insights Individuales (Ahora persistente)
         st.divider()
         st.subheader("👤 Generador de Reportes Individuales (Insights)")
         
-        # Carga de históricos para la comparativa narrativa
+        # Carga de históricos
         h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
         h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
         h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
@@ -745,7 +764,6 @@ if st.button("🚀 PROCESAR JORNADA"):
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for a_sel in seleccionados:
-                    # Llamada al motor narrativo inyectado en el Paso 2
                     r_indiv = generar_reporte_narrativo_individual(a_sel, df_resultados, dict_h_ref, num_semana_procesar)
                     if r_indiv:
                         zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
@@ -756,5 +774,3 @@ if st.button("🚀 PROCESAR JORNADA"):
                 file_name=f"Individuales_Sem_{num_semana_procesar}.zip", 
                 mime="application/zip"
             )
-    else:
-        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
