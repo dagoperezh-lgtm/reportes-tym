@@ -898,6 +898,28 @@ num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
 area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):")
 area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
 
+# --- NUEVA SECCIÓN: INTERFAZ DE PLANIFICACIÓN ---
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📅 Planificación Semanal")
+        file_plan_indiv = st.sidebar.file_uploader("Subir Plan Individual (Excel)", type=['xlsx'])
+
+        with st.sidebar.expander("⚙️ Configuración Plan Global"):
+            p_n_h = st.number_input("Natación (Horas)", value=3.0, step=0.5)
+            p_n_s = st.number_input("Natación (Sesiones)", value=3, step=1)
+            p_b_h = st.number_input("Ciclismo (Horas)", value=3.5, step=0.5)
+            p_b_s = st.number_input("Ciclismo (Sesiones)", value=3, step=1)
+            p_t_h = st.number_input("Trote (Horas)", value=1.3, step=0.5)
+            p_t_s = st.number_input("Trote (Sesiones)", value=2, step=1)
+
+        dict_plan_global = {
+            'Natacion_Hrs_Plan': p_n_h, 'Natacion_Ses_Plan': p_n_s,
+            'Ciclismo_Hrs_Plan': p_b_h, 'Ciclismo_Ses_Plan': p_b_s,
+            'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
+        }
+
+        df_plan_indiv = None
+        if file_plan_indiv:
+            df_plan_indiv = pd.read_excel(file_plan_indiv)
 # Contenedor para mantener los resultados visibles tras la interacción
 contenedor_resultados = st.container()
 
