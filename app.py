@@ -920,6 +920,7 @@ area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
         df_plan_indiv = None
         if file_plan_indiv:
             df_plan_indiv = pd.read_excel(file_plan_indiv)
+            
 # Contenedor para mantener los resultados visibles tras la interacción
 contenedor_resultados = st.container()
 
@@ -928,6 +929,13 @@ if st.button("🚀 PROCESAR JORNADA"):
         # Procesar Parsing y guardarlo en el estado de la sesión para persistencia
         st.session_state['df_resultados'] = parse_raw_data(area_texto_strava)
         st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
+        # VINCULACIÓN DEL MOTOR DE CUMPLIMIENTO
+        if st.session_state['df_resultados'] is not None:
+            st.session_state['df_resultados'] = calcular_metricas_cumplimiento(
+                st.session_state['df_resultados'], 
+                df_plan_indiv, 
+                dict_plan_global
+            )
         st.session_state['procesado_ok'] = True
     else:
         st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
