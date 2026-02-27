@@ -315,20 +315,22 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
     """
     df = df_reales.copy()
     
-    # Blindaje de columnas para evitar que el sistema falle si falta un dato
-    columnas_reales = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']
+    # 1. Blindaje: Aseguramos que existan las columnas reales (N, B, T)
+    # Cambiamos 'R' por 'T' para que coincida con tu formato de Trote
+    columnas_reales = ['N_Mins', 'B_Mins', 'T_Mins', 'N_Ses', 'B_Ses', 'T_Ses']
     for col in columnas_reales:
         if col not in df.columns:
             df[col] = 0
     df[columnas_reales] = df[columnas_reales].fillna(0)
 
-    # 1. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
+    # Mapping corregido para evitar el KeyError
     mapping = {
         'Natacion': {'h': 'N_Mins', 's': 'N_Ses'},
         'Ciclismo': {'h': 'B_Mins', 's': 'B_Ses'},
-        'Trote':    {'h': 'R_Mins', 's': 'R_Ses'}
+        'Trote':    {'h': 'T_Mins', 's': 'T_Ses'}
     }
 
+    # 2. INTEGRACIÓN DE PLANES
     for disc in mapping.keys():
         h_plan_col = f"{disc}_Hrs_Plan"
         s_plan_col = f"{disc}_Ses_Plan"
@@ -336,41 +338,41 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         def extraer_plan(atleta, col_name, val_global):
             if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
                 val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
-                return val if val > 0 else np.nan
-            return val_global if val_global > 0 else np.nan
+                return val if val > 0 else val_global
+            return val_global
 
         df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
         df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
 
-    # 2. CÁLCULOS TÉCNICOS
+    # 3. CÁLCULOS TÉCNICOS DE KPI
     for d, cols in mapping.items():
-        df[f'VCI_{d}'] = (df[cols['h']] / (df[f'{d}_Hrs_Plan'] * 60)) * 100
-        df[f'SEI_{d}'] = (df[cols['real_s']] / df[f'{d}_Ses_Plan']) * 100
+        # Cálculo de Volumen (VCI)
+        mins_plan = df[f'{d}_Hrs_Plan'] * 60
+        df[f'VCI_{d}'] = np.where(mins_plan > 0, (df[cols['h']] / mins_plan) * 100, 0)
+        
+        # Cálculo de Sesiones (SEI) - AQUÍ SE CORRIGIÓ EL ERROR
+        ses_plan = df[f'{d}_Ses_Plan']
+        df[f'SEI_{d}'] = np.where(ses_plan > 0, (df[cols['s']] / ses_plan) * 100, 0)
+        
+        # TPI por disciplina
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
 
-    # Limpieza de errores matemáticos
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
-    # 3. CLASIFICACIÓN Y BALANCE
-    for d in mapping.keys():
-        df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
+    # 4. CÁLCULOS GLOBALES
+    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
+    ses_p_tot = df[['Natacion_Ses_Plan', 'Ciclismo_Ses_Plan', 'Trote_Ses_Plan']].sum(axis=1)
+    mins_r_tot = df['N_Mins'] + df['B_Mins'] + df['T_Mins']
+    ses_r_tot = df['N_Ses'] + df['B_Ses'] + df['T_Ses']
 
-    # Cálculos Globales
-    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1, min_count=1)
-    ses_p_tot = df[['Natacion_Ses_Plan', 'Ciclismo_Ses_Plan', 'Trote_Ses_Plan']].sum(axis=1, min_count=1)
-    mins_r_tot = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
-    ses_r_tot = df['N_Ses'] + df['B_Ses'] + df['R_Ses']
-
-    df['VCI_Global'] = (mins_r_tot / (hrs_p_tot * 60)) * 100
-    df['SEI_Global'] = (ses_r_tot / ses_p_tot) * 100
+    df['VCI_Global'] = np.where(hrs_p_tot > 0, (mins_r_tot / (hrs_p_tot * 60)) * 100, 0)
+    df['SEI_Global'] = np.where(ses_p_tot > 0, (ses_r_tot / ses_p_tot) * 100, 0)
     df['TPI_Global'] = (0.4 * df['VCI_Global']) + (0.6 * df['SEI_Global'])
     
-    # Índice de Balance (Estricto)
-    conteo_disc = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].notna().sum(axis=1)
-    df['Indice_Balance'] = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].std(axis=1, ddof=0)
-    df.loc[conteo_disc < 2, 'Indice_Balance'] = np.nan
-
+    # Clasificación de estado
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
+
+    # Limpieza final
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    df.fillna(0, inplace=True)
 
     return df
     
@@ -380,7 +382,7 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
 
 def parse_raw_data(bloque_input_strava):
     """
-    Procesa el bloque de texto copiado de Strava (Tiempo Total).
+    Procesa el bloque de texto copiado de Strava (Tiempo Total) o Listado Manual.
     No utiliza síntesis; cada paso de extracción es explícito y visible.
     """
     lista_de_registros_atleta = []
@@ -391,49 +393,57 @@ def parse_raw_data(bloque_input_strava):
     lineas_encontradas = bloque_input_strava.strip().split('\n')
     
     for fila_texto in lineas_encontradas:
-        if not fila_texto:
+        if not fila_texto or ";" in fila_texto:
             continue
             
         if 'Deportista' in fila_texto:
             continue
             
         try:
-            # Expresión regular para detectar tiempos con formato h y min
-            patron_tiempos = r'(\d+h\s*\d*min|\d+h|\d+min|--:--)'
-            tiempos_en_linea = re.findall(patron_tiempos, fila_texto)
+            # --- DETECCIÓN DE FORMATO (RELOJ HH:MM:SS vs STRAVA h min) ---
+            patron_reloj = r'(\d{1,2}:\d{2}:\d{2})'
+            match_reloj = re.search(patron_reloj, fila_texto)
             
-            # 🛡️ CORRECCIÓN SINTAXIS AUDITADA:
-            if not tiempos_en_linea:
-                continue
+            if match_reloj:
+                # Caso A: Formato Manual (Ej: Francisco Ramírez 14:22:59)
+                string_del_total = match_reloj.group(1)
+                ubicacion_del_tiempo = fila_texto.find(string_del_total)
+                segmento_del_nombre = fila_texto[:ubicacion_del_tiempo].strip()
+                nombre_limpio_final = re.sub(r'^\d+\s*', '', segmento_del_nombre).strip()
                 
-            # El Tiempo Total es siempre el primer elemento detectado
-            string_del_total = tiempos_en_linea[0]
-            ubicacion_del_tiempo = fila_texto.find(string_del_total)
-            
-            # El nombre del deportista precede a la cifra de tiempo
-            segmento_del_nombre = fila_texto[:ubicacion_del_tiempo].strip()
-            
-            # Limpieza del número de ranking si está presente en el copiado (ej: "1 Rodrigo")
-            nombre_limpio_final = re.sub(r'^\d+\s*', '', segmento_del_nombre).strip()
-            
-            # Conversión de los bloques de tiempo a minutos enteros
-            minutos_volumen_total = to_mins(string_del_total)
-            
-            minutos_nat = 0
-            if len(tiempos_en_linea) > 1:
-                minutos_nat = to_mins(tiempos_en_linea[1])
+                # Conversión de HH:MM:SS a minutos enteros
+                h, m, s = map(int, string_del_total.split(':'))
+                minutos_volumen_total = h * 60 + m + (s / 60)
                 
-            minutos_bici = 0
-            if len(tiempos_en_linea) > 2:
-                minutos_bici = to_mins(tiempos_en_linea[2])
+                minutos_nat = 0
+                minutos_bici = 0
+                minutos_trote = 0
+                numero_de_actividades = 1 # Valor base para entrada manual
+            else:
+                # Caso B: Formato Strava Tradicional (Tu lógica original)
+                patron_tiempos = r'(\d+h\s*\d*min|\d+h|\d+min|--:--)'
+                tiempos_en_linea = re.findall(patron_tiempos, fila_texto)
                 
-            minutos_trote = 0
-            if len(tiempos_en_linea) > 3:
-                minutos_trote = to_mins(tiempos_en_linea[3])
+                if not tiempos_en_linea:
+                    continue
+                    
+                string_del_total = tiempos_en_linea[0]
+                ubicacion_del_tiempo = fila_texto.find(string_del_total)
+                segmento_del_nombre = fila_texto[:ubicacion_del_tiempo].strip()
+                nombre_limpio_final = re.sub(r'^\d+\s*', '', segmento_del_nombre).strip()
                 
-            # Cálculo del Coeficiente de Variación (CV)
+                minutos_volumen_total = to_mins(string_del_total)
+                
+                minutos_nat = to_mins(tiempos_en_linea[1]) if len(tiempos_en_linea) > 1 else 0
+                minutos_bici = to_mins(tiempos_en_linea[2]) if len(tiempos_en_linea) > 2 else 0
+                minutos_trote = to_mins(tiempos_en_linea[3]) if len(tiempos_en_linea) > 3 else 0
+                
+                segmento_final_linea = fila_texto[ubicacion_del_tiempo + len(string_del_total):]
+                match_de_actividades = re.search(r'\d+', segmento_final_linea)
+                numero_de_actividades = int(match_de_actividades.group()) if match_de_actividades else 0
+
+            # --- CÁLCULO DE CV (Mantenemos tu lógica original) ---
             lista_tiempos_cv = [minutos_nat, minutos_bici, minutos_trote]
-            
             if 0 in lista_tiempos_cv:
                 valor_cv_final = "NC"
             else:
@@ -441,15 +451,7 @@ def parse_raw_data(bloque_input_strava):
                 calculo_mean = np.mean(lista_tiempos_cv)
                 valor_cv_final = round(calculo_std / calculo_mean, 4)
             
-            # Extracción del conteo de actividades (dato tras el tiempo total)
-            segmento_final_linea = fila_texto[ubicacion_del_tiempo + len(string_total := string_del_total):]
-            match_de_actividades = re.search(r'\d+', segmento_final_linea)
-            
-            numero_de_actividades = 0
-            if match_de_actividades:
-                numero_de_actividades = int(match_de_actividades.group())
-            
-            # Construcción del registro detallado por cada deportista
+            # --- CONSTRUCCIÓN DEL REGISTRO (Blindado) ---
             diccionario_de_atleta = {
                 '#': valor_rank_contador,
                 'Deportista': nombre_limpio_final,
@@ -462,20 +464,21 @@ def parse_raw_data(bloque_input_strava):
                 'T_Mins': minutos_volumen_total,
                 'N_Mins': minutos_nat,
                 'B_Mins': minutos_bici,
-                'R_Mins': minutos_trote
+                'T_Mins_Real': minutos_trote # Mantenemos distinción técnica si la usas
             }
             
+            # Aseguramos columnas de sesiones para el motor de la Sección 3
+            diccionario_de_atleta['N_Ses'] = 1 if minutos_nat > 0 else 0
+            diccionario_de_atleta['B_Ses'] = 1 if minutos_bici > 0 else 0
+            diccionario_de_atleta['T_Ses'] = 1 if minutos_trote > 0 else 0
+            
             lista_de_registros_atleta.append(diccionario_de_atleta)
-            valor_rank_contador = valor_rank_contador + 1
+            valor_rank_contador += 1
             
         except Exception:
-            # Omisión de líneas corruptas o sin formato válido
             continue
             
-    # Retorno estructurado para procesamiento masivo en hojas de cálculo
-    df_resultado_parsing = pd.DataFrame(lista_de_registros_atleta)
-    
-    return df_resultado_parsing
+    return pd.DataFrame(lista_de_registros_atleta)
 
 def parse_ocr_data(texto_ocr_crudo):
     """
@@ -485,7 +488,6 @@ def parse_ocr_data(texto_ocr_crudo):
     lista_podio_distancia = []
     lista_podio_larga = []
     
-    # Listado de términos prohibidos en las celdas de datos (encabezados)
     filtro_nombres_tabla = ["Nombre", "Distancia", "Actividad", "Tiempo", "Km", "total", "Clasificación"]
     
     lineas_de_la_entrada_ocr = texto_ocr_crudo.strip().split('\n')
@@ -503,24 +505,13 @@ def parse_ocr_data(texto_ocr_crudo):
             valor_metrica_l = celdas_ocr[5].strip()
             
             # Validación de integridad para columna de Distancia
-            es_titulo_d = False
-            for term_f in filtro_nombres_tabla:
-                if term_f.lower() in nombre_atleta_d.lower():
-                    es_titulo_d = True
-            
-            if es_titulo_d == False and nombre_atleta_d != "":
+            if nombre_atleta_d and not any(term.lower() in nombre_atleta_d.lower() for term in filtro_nombres_tabla):
                 lista_podio_distancia.append({'nombre': nombre_atleta_d, 'valor': valor_metrica_d})
                 
             # Validación de integridad para columna de Salida Larga
-            es_titulo_l = False
-            for term_f in filtro_nombres_tabla:
-                if term_f.lower() in nombre_atleta_l.lower():
-                    es_titulo_l = True
-                    
-            if es_titulo_l == False and nombre_atleta_l != "":
+            if nombre_atleta_l and not any(term.lower() in nombre_atleta_l.lower() for term in filtro_nombres_tabla):
                 lista_podio_larga.append({'nombre': nombre_atleta_l, 'valor': valor_metrica_l})
                 
-    # Retornar exclusivamente el Top 3 de cada categoría de honor
     return lista_podio_distancia[:3], lista_podio_larga[:3]
 
 # *****************************************************************************
@@ -897,31 +888,31 @@ with st.sidebar:
     st.title("Panel de Control")
     
     st.header("📂 Gestión de Base de Datos")
-    # RENOMBRADO A TU SOLICITUD:
-    cargador_maestro_excel = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"], help="Cargue el Excel que contiene la evolución de todas las semanas.")
+    # Campo explícito para el histórico
+    cargador_historico = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"], help="Cargue el Excel que contiene la evolución de todas las semanas anteriores.")
     num_semana_procesar = st.text_input("Número de Semana a procesar (Ej: 08):", "08")
     
     st.markdown("---")
     
-    # --- PARTE 1: ENTRENAMIENTOS REALIZADOS (DATOS SEMANALES) ---
+    # --- PARTE 1: DATOS REALES (EJECUTADOS) ---
     st.subheader("1️⃣ Entrenamientos Ejecutados")
     area_texto_real = st.text_area(
         "PEGAR DATOS AQUÍ (Texto/OCR):", 
-        height=250, 
-        placeholder="Pega aquí la lista de la semana (Ej: Francisco Ramírez 14h 22min...)"
+        height=300, 
+        placeholder="Pega aquí la lista de la semana y la tabla de récords (Francisco Ramírez 14:22:59...)"
     )
 
     st.markdown("---")
 
-    # --- PARTE 2: PLANIFICACIÓN SEMANAL (CAMBIA CADA SEMANA) ---
+    # --- PARTE 2: PLANIFICACIÓN (METAS) ---
     st.subheader("2️⃣ Planificación (Metas)")
     
-    # Aquí subes el Excel con los nuevos tiempos de la semana
+    # Selector de archivo de plan
     file_plan = st.file_uploader("👤 Subir Archivo de Plan (Global o Individual)", type=['xlsx'])
 
     with st.expander("🌍 Configuración Manual (Si no hay archivo)"):
-        st.write("Ajusta aquí las metas para esta semana específica:")
-        # Natación fija 3h/3s por defecto
+        st.write("Ajusta las metas para esta semana específica:")
+        # Valores por defecto solicitados: Natación 3h/3s
         p_n_h = st.number_input("Natación (Horas meta)", value=3.0, step=0.5)
         p_n_s = st.number_input("Natación (Sesiones meta)", value=3, step=1)
         
@@ -936,74 +927,100 @@ with st.sidebar:
         'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
     }
     
-    # Lógica de detección de Plan
+    # Lógica de detección de tipo de Plan (Individual vs Global)
     df_plan_indiv = None
     if file_plan:
         df_temp = pd.read_excel(file_plan)
         if 'Deportista' in df_temp.columns:
-            df_plan_indiv = df_temp
+            df_plan_indiv = df_temp # Modo Individual
         else:
-            dict_plan_global['Natacion_Hrs_Plan'] = df_temp.iloc[0].get('Natacion_Hrs_Plan', p_n_h)
-            dict_plan_global['Natacion_Ses_Plan'] = df_temp.iloc[0].get('Natacion_Ses_Plan', p_n_s)
-            dict_plan_global['Ciclismo_Hrs_Plan'] = df_temp.iloc[0].get('Ciclismo_Hrs_Plan', p_b_h)
-            dict_plan_global['Ciclismo_Ses_Plan'] = df_temp.iloc[0].get('Ciclismo_Ses_Plan', p_b_s)
-            dict_plan_global['Trote_Hrs_Plan'] = df_temp.iloc[0].get('Trote_Hrs_Plan', p_t_h)
-            dict_plan_global['Trote_Ses_Plan'] = df_temp.iloc[0].get('Trote_Ses_Plan', p_t_s)
+            # Modo Global: actualiza los valores del diccionario
+            for k in dict_plan_global.keys():
+                if k in df_temp.columns:
+                    dict_plan_global[k] = df_temp.iloc[0][k]
 
     st.markdown("---")
     
+    # --- BOTÓN DE ACCIÓN ---
     if st.button("🚀 PROCESAR JORNADA"):
-        if cargador_maestro_excel and area_texto_real.strip():
-            # Procesamiento de datos reales
+        if cargador_historico and area_texto_real.strip():
+            # 1. Procesar datos del texto (Realizado y Podios)
             df_resultados = parse_raw_data(area_texto_real)
+            # Guardamos los podios en el estado de la sesión
             st.session_state['podios_ocr'] = parse_ocr_data(area_texto_real)
             
-            # Cálculo de KPI contra el plan cargado
+            # 2. Calcular cumplimiento contra el plan
             df_resultados = calcular_metricas_cumplimiento(df_resultados, df_plan_indiv, dict_plan_global)
             
             st.session_state['df_resultados'] = df_resultados
             st.session_state['procesado_ok'] = True
         else:
-            st.error("Error: Debe subir el 'Archivo Histórico' y pegar los entrenamientos ejecutados.")
+            st.error("Error: Debe subir el 'Archivo Histórico' y pegar los datos de la semana.")
 
-# --- CUERPO PRINCIPAL ---
+# --- CUERPO PRINCIPAL (VISUALIZACIÓN Y REPORTES) ---
 if st.session_state.get('procesado_ok'):
-    df_resultados = st.session_state['df_resultados']
-    d_p_dist, d_p_larg = st.session_state['podios_ocr']
+    df_res = st.session_state['df_resultados']
+    # Recuperamos los podios detectados
+    lista_d, lista_l = st.session_state.get('podios_ocr', ([], []))
+    
+    # Formateamos los strings para el Word (tomando el N°1 de cada lista)
+    podio_dist = f"{lista_d[0]['nombre']} ({lista_d[0]['valor']})" if lista_d else "N/A"
+    podio_larg = f"{lista_l[0]['nombre']} ({lista_l[0]['valor']})" if lista_l else "N/A"
     
     st.header(f"📊 Análisis de Cumplimiento - Semana {num_semana_procesar}")
     
-    # Formatear columnas de KPI
-    cols_kpi = [c for c in df_resultados.columns if any(k in c for k in ['VCI', 'TPI', 'SEI'])]
-    if cols_kpi:
-        st.dataframe(df_resultados.style.format("{:.1f}%", subset=cols_kpi))
-    else:
-        st.dataframe(df_resultados)
+    # Mostrar tabla con formato de porcentaje para KPIs (VCI, SEI, TPI)
+    cols_kpi = [c for c in df_res.columns if any(x in c for x in ['VCI', 'SEI', 'TPI'])]
+    st.dataframe(df_res.style.format("{:.1f}%", subset=cols_kpi))
 
     st.divider()
     col1, col2 = st.columns(2)
-    with col1:
-        st.download_button("📄 REPORTE WORD GRUPAL", generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), f"Reporte_TYM_{num_semana_procesar}.docx")
-    with col2:
-        st.download_button("📊 ARCHIVO HISTÓRICO ACTUALIZADO", crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), f"Historico_Actualizado_Sem_{num_semana_procesar}.xlsx")
-
-    # REPORTES INDIVIDUALES
-    st.divider()
-    st.subheader("👤 Generar Reportes Individuales")
-    df_activos = df_resultados[df_resultados['T_Mins'] > 0]
-    seleccionados = st.multiselect("Seleccionar Atletas:", df_activos['Deportista'].tolist())
     
-    if seleccionados and st.button("📦 GENERAR ZIP"):
-        h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
-        h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
-        h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
-        h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
-        dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
-        
+    with col1:
+        # Generación del Reporte Word Grupal
+        st.download_button(
+            label="📄 REPORTE WORD GRUPAL", 
+            data=generar_reporte_word_tym_completo(df_res, num_semana_procesar, podio_dist, podio_larg), 
+            file_name=f"Reporte_TYM_Sem_{num_semana_procesar}.docx"
+        )
+            
+    with col2:
+        # Generación del Histórico Actualizado
+        st.download_button(
+            label="📊 ARCHIVO HISTÓRICO ACTUALIZADO", 
+            data=crear_excel_actualizado(cargador_historico, df_res, num_semana_procesar), 
+            file_name=f"Historico_Actualizado_Sem_{num_semana_procesar}.xlsx"
+        )
+
+    # --- SECCIÓN DE REPORTES INDIVIDUALES (GENERACIÓN DE ZIP) ---
+    st.divider()
+    st.subheader("👤 Generar Reportes Individuales (Insights)")
+    
+    # Carga de datos históricos para la narrativa comparativa
+    h_t = pd.read_excel(cargador_historico, sheet_name="Tiempo Total", dtype=object)
+    h_n = pd.read_excel(cargador_historico, sheet_name="Natación", dtype=object)
+    h_c = pd.read_excel(cargador_historico, sheet_name="Ciclismo", dtype=object)
+    h_r = pd.read_excel(cargador_historico, sheet_name="Trote", dtype=object)
+    dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
+
+    # Atletas con actividad en la semana
+    df_activos = df_res[df_res['T_Mins'] > 0]
+    atletas_list = df_activos['Deportista'].tolist()
+    
+    seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_list)
+    
+    if seleccionados and st.button("📦 GENERAR ZIP INDIVIDUALES"):
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w") as zf:
             for a_sel in seleccionados:
-                r_indiv = generar_reporte_narrativo_individual(a_sel, df_resultados, dict_h_ref, num_semana_procesar)
-                if r_indiv:
-                    zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
-        st.download_button("⬇️ DESCARGAR ZIP", zip_buffer.getvalue(), f"Individuales_Sem_{num_semana_procesar}.zip")
+                reporte_ind = generar_reporte_narrativo_individual(a_sel, df_res, dict_h_ref, num_semana_procesar)
+                if reporte_ind:
+                    # Limpiamos el nombre para el nombre del archivo
+                    nombre_archivo = a_sel.replace(' ', '_')
+                    zf.writestr(f"Reporte_{nombre_archivo}.docx", reporte_ind.getvalue())
+        
+        st.download_button(
+            label="⬇️ DESCARGAR ZIP INDIVIDUALES", 
+            data=zip_buffer.getvalue(), 
+            file_name=f"Individuales_Sem_{num_semana_procesar}.zip"
+        )
