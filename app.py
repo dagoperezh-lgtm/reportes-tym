@@ -889,29 +889,37 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
-# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
+# --- 7. INTERFAZ DE USUARIO (STREAMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
 # *****************************************************************************
 
 with st.sidebar:
     st.image("https://raw.githubusercontent.com/dagoperez/reportes-tym/main/logo_tym.png", width=150)
     st.title("Panel de Control")
     
-    st.subheader("1. Carga de Actividades")
-    file_strava = st.file_uploader("Subir Strava (Excel)", type=['xlsx', 'xls'])
-    area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
+    # --- ENTRADA DE DATOS REALES ---
+    st.header("1️⃣ Datos Ejecutados")
+    st.info("Cargue lo que los atletas realizaron en la semana.")
+    
+    file_actividades = st.file_uploader("📂 Archivo de Actividades (Excel)", type=['xlsx', 'xls'], help="Suba el reporte exportado de la plataforma de seguimiento.")
+    
+    area_texto_real = st.text_area("📝 Lista de Tiempos (Pegar texto):", height=250, help="Pegue aquí el listado de nombres y tiempos de la semana (Ej: Francisco Ramírez 14h 22min).")
 
-    # --- SECCIÓN: PLANIFICACIÓN SEMANAL ---
     st.markdown("---")
-    st.subheader("📅 Planificación")
-    file_plan_indiv = st.file_uploader("Subir Plan Individual (Excel)", type=['xlsx'])
 
-    with st.expander("⚙️ Configuración Plan Global"):
-        p_n_h = st.number_input("Natación (Horas)", value=3.0, step=0.5)
-        p_n_s = st.number_input("Natación (Sesiones)", value=3, step=1)
-        p_b_h = st.number_input("Ciclismo (Horas)", value=3.5, step=0.5)
-        p_b_s = st.number_input("Ciclismo (Sesiones)", value=3, step=1)
-        p_t_h = st.number_input("Trote (Horas)", value=1.3, step=0.5)
-        p_t_s = st.number_input("Trote (Sesiones)", value=2, step=1)
+    # --- ENTRADA DE PLANIFICACIÓN (METAS) ---
+    st.header("2️⃣ Planificación (Metas)")
+    st.info("Defina el objetivo para calcular cumplimiento (KPI).")
+    
+    file_plan_indiv = st.file_uploader("👤 Subir Plan Individual (Excel)", type=['xlsx'], help="Opcional: Use un Excel si cada atleta tiene metas distintas.")
+
+    with st.expander("🌍 Definir Plan Global (Para todo el equipo)"):
+        st.write("Si no hay plan individual, se usarán estos valores:")
+        p_n_h = st.number_input("Natación (Horas meta)", value=0.0, step=0.5)
+        p_n_s = st.number_input("Natación (Sesiones meta)", value=0, step=1)
+        p_b_h = st.number_input("Ciclismo (Horas meta)", value=0.0, step=0.5)
+        p_b_s = st.number_input("Ciclismo (Sesiones meta)", value=0, step=1)
+        p_t_h = st.number_input("Trote (Horas meta)", value=0.0, step=0.5)
+        p_t_s = st.number_input("Trote (Sesiones meta)", value=0, step=1)
 
     dict_plan_global = {
         'Natacion_Hrs_Plan': p_n_h, 'Natacion_Ses_Plan': p_n_s,
@@ -924,71 +932,39 @@ with st.sidebar:
         df_plan_indiv = pd.read_excel(file_plan_indiv)
 
     st.markdown("---")
-    st.subheader("⚙️ Configuración de Reporte")
-    num_semana_procesar = st.number_input("Semana a procesar:", min_value=1, max_value=53, value=1)
+    num_semana_procesar = st.number_input("Semana a procesar:", min_value=1, max_value=53, value=8)
     
-    if st.button("🚀 PROCESAR JORNADA"):
-        if file_strava and area_texto_ocr:
-            # Procesamiento de Strava y OCR
-            df_strava = parse_strava_data(file_strava)
-            df_ocr = parse_ocr_data(area_texto_ocr)
+    # --- BOTÓN DE ACCIÓN ---
+    if st.button("🚀 GENERAR ANÁLISIS DE CUMPLIMIENTO"):
+        if area_texto_real or file_actividades:
+            # 1. Procesar Datos Reales
+            df_real_text = parse_ocr_data(area_texto_real) if area_texto_real else pd.DataFrame()
             
-            # Unificación de resultados
-            df_resultados = pd.concat([df_ocr, df_strava], ignore_index=True)
-            df_resultados = df_resultados.groupby('Deportista', as_index=False).sum()
-            
-            # INYECCIÓN DEL MOTOR DE CUMPLIMIENTO
+            if file_actividades:
+                # Aquí se usa la lógica interna de procesamiento de archivos
+                df_real_file = parse_strava_data(file_actividades) # La función interna se mantiene, el nombre externo cambia
+                df_resultados = pd.concat([df_real_text, df_real_file], ignore_index=True)
+                df_resultados = df_resultados.groupby('Deportista', as_index=False).sum()
+            else:
+                df_resultados = df_real_text
+
+            # 2. Motor de Cumplimiento (KPI)
+            # Si no hay plan (global e individual en 0), la función devuelve los datos sin error
             df_resultados = calcular_metricas_cumplimiento(df_resultados, df_plan_indiv, dict_plan_global)
             
-            # Guardar en estado de sesión para persistencia
             st.session_state['df_resultados'] = df_resultados
-            st.session_state['podios_ocr'] = df_ocr
             st.session_state['procesado_ok'] = True
         else:
-            st.error("Por favor, sube el archivo Strava y pega los datos OCR.")
+            st.warning("Debe ingresar al menos una fuente de datos reales (Archivo o Texto).")
 
-# --- CUERPO PRINCIPAL: VISUALIZACIÓN DE RESULTADOS ---
+# --- VISUALIZACIÓN DE RESULTADOS ---
 if st.session_state.get('procesado_ok'):
-    st.header("📊 Resultados del Procesamiento")
+    st.header(f"📊 Reporte de Cumplimiento - Semana {num_semana_procesar}")
     df_res = st.session_state['df_resultados']
     
-    # Aplicar formato de porcentaje a las columnas de métricas
+    # Formato de porcentaje solo si existen las columnas de KPI
     cols_kpi = [c for c in df_res.columns if any(k in c for k in ['VCI', 'TPI', 'SEI'])]
-    st.dataframe(df_res.style.format("{:.1f}%", subset=cols_kpi))
-
-    st.markdown("---")
-    st.header("📄 Generación de Reportes Word")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("📝 Generar Reporte Grupal"):
-            # Obtenemos dict_h_ref para el reporte grupal
-            dict_h_ref = df_res.set_index('Deportista')['T_Mins'].to_dict()
-            doc_grupal = generar_reporte_grupal(df_res, num_semana_procesar)
-            st.download_button(
-                label="⬇️ Descargar Reporte Grupal",
-                data=doc_grupal,
-                file_name=f"Reporte_Grupal_Semana_{num_semana_procesar}.docx"
-            )
-            
-    with c2:
-        df_activos = df_res[df_res['T_Mins'] > 0]
-        atletas_activos_list = df_activos['Deportista'].tolist()
-        
-        st.write(f"ℹ️ {len(atletas_activos_list)} atletas con actividad.")
-        seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_activos_list)
-        
-        if seleccionados and st.button("📦 Generar ZIP Individuales"):
-            dict_h_ref = df_res.set_index('Deportista')['T_Mins'].to_dict()
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for a_sel in seleccionados:
-                    r_indiv = generar_reporte_narrativo_individual(a_sel, df_res, dict_h_ref, num_semana_procesar)
-                    if r_indiv:
-                        zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
-            
-            st.download_button(
-                label="⬇️ Descargar ZIP Individuales",
-                data=zip_buffer.getvalue(),
-                file_name=f"Individuales_Semana_{num_semana_procesar}.zip"
-            )
+    if cols_kpi:
+        st.dataframe(df_res.style.format("{:.1f}%", subset=cols_kpi))
+    else:
+        st.dataframe(df_res)
