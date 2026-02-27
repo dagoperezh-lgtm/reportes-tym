@@ -896,9 +896,10 @@ with st.sidebar:
     st.image("https://raw.githubusercontent.com/dagoperez/reportes-tym/main/logo_tym.png", width=150)
     st.title("Panel de Control")
     
-    st.header("📂 Gestión de Datos")
-    cargador_maestro_excel = st.file_uploader("Cargar Excel Maestro", type=["xlsx"])
-    num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
+    st.header("📂 Gestión de Base de Datos")
+    # RENOMBRADO A TU SOLICITUD:
+    cargador_maestro_excel = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"], help="Cargue el Excel que contiene la evolución de todas las semanas.")
+    num_semana_procesar = st.text_input("Número de Semana a procesar (Ej: 08):", "08")
     
     st.markdown("---")
     
@@ -919,9 +920,11 @@ with st.sidebar:
     file_plan = st.file_uploader("👤 Subir Archivo de Plan (Global o Individual)", type=['xlsx'])
 
     with st.expander("🌍 Configuración Manual (Si no hay archivo)"):
-        st.write("Si no subes un Excel, ajusta aquí las metas de esta semana:")
+        st.write("Ajusta aquí las metas para esta semana específica:")
+        # Natación fija 3h/3s por defecto
         p_n_h = st.number_input("Natación (Horas meta)", value=3.0, step=0.5)
         p_n_s = st.number_input("Natación (Sesiones meta)", value=3, step=1)
+        
         p_b_h = st.number_input("Ciclismo (Horas meta)", value=4.0, step=0.5)
         p_b_s = st.number_input("Ciclismo (Sesiones meta)", value=3, step=1)
         p_t_h = st.number_input("Trote (Horas meta)", value=1.5, step=0.5)
@@ -933,14 +936,13 @@ with st.sidebar:
         'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
     }
     
-    # Lógica para detectar si el plan es Global (tu formato) o Individual
+    # Lógica de detección de Plan
     df_plan_indiv = None
     if file_plan:
         df_temp = pd.read_excel(file_plan)
         if 'Deportista' in df_temp.columns:
-            df_plan_indiv = df_temp # Es individual
+            df_plan_indiv = df_temp
         else:
-            # Es tu formato Global: toma los valores de la primera fila
             dict_plan_global['Natacion_Hrs_Plan'] = df_temp.iloc[0].get('Natacion_Hrs_Plan', p_n_h)
             dict_plan_global['Natacion_Ses_Plan'] = df_temp.iloc[0].get('Natacion_Ses_Plan', p_n_s)
             dict_plan_global['Ciclismo_Hrs_Plan'] = df_temp.iloc[0].get('Ciclismo_Hrs_Plan', p_b_h)
@@ -952,24 +954,24 @@ with st.sidebar:
     
     if st.button("🚀 PROCESAR JORNADA"):
         if cargador_maestro_excel and area_texto_real.strip():
-            # Procesar lo que hicieron (Real)
+            # Procesamiento de datos reales
             df_resultados = parse_raw_data(area_texto_real)
             st.session_state['podios_ocr'] = parse_ocr_data(area_texto_real)
             
-            # Calcular contra el plan cargado
+            # Cálculo de KPI contra el plan cargado
             df_resultados = calcular_metricas_cumplimiento(df_resultados, df_plan_indiv, dict_plan_global)
             
             st.session_state['df_resultados'] = df_resultados
             st.session_state['procesado_ok'] = True
         else:
-            st.error("Faltan datos para procesar la semana.")
+            st.error("Error: Debe subir el 'Archivo Histórico' y pegar los entrenamientos ejecutados.")
 
 # --- CUERPO PRINCIPAL ---
 if st.session_state.get('procesado_ok'):
     df_resultados = st.session_state['df_resultados']
     d_p_dist, d_p_larg = st.session_state['podios_ocr']
     
-    st.header(f"📊 Resultados de Cumplimiento - Semana {num_semana_procesar}")
+    st.header(f"📊 Análisis de Cumplimiento - Semana {num_semana_procesar}")
     
     # Formatear columnas de KPI
     cols_kpi = [c for c in df_resultados.columns if any(k in c for k in ['VCI', 'TPI', 'SEI'])]
@@ -983,7 +985,7 @@ if st.session_state.get('procesado_ok'):
     with col1:
         st.download_button("📄 REPORTE WORD GRUPAL", generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), f"Reporte_TYM_{num_semana_procesar}.docx")
     with col2:
-        st.download_button("📊 EXCEL MAESTRO ACTUALIZADO", crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), f"Estadisticas_Semana_{num_semana_procesar}.xlsx")
+        st.download_button("📊 ARCHIVO HISTÓRICO ACTUALIZADO", crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), f"Historico_Actualizado_Sem_{num_semana_procesar}.xlsx")
 
     # REPORTES INDIVIDUALES
     st.divider()
