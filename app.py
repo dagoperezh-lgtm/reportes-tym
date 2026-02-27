@@ -296,6 +296,84 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     
     return comentario_final
 
+# =============================================================================
+# SECCIÓN 3.1: MOTOR DE ANALÍTICA DE CUMPLIMIENTO (FRAMEWORK TYM)
+# =============================================================================
+
+def clasificar_cumplimiento(valor):
+    """Escala interpretativa para el Training Performance Index (TPI)."""
+    if pd.isna(valor): return "NC"
+    if valor > 105:   return "Sobrecarga"
+    if valor >= 95:  return "Óptimo"
+    if valor >= 85:  return "Parcial"
+    return "Riesgo"
+
+def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
+    """
+    Framework de cumplimiento TYM. 
+    Analiza Volumen (VCI), Constancia (SEI) y Balance de Disciplinas.
+    """
+    df = df_reales.copy()
+    
+    # Blindaje de columnas para evitar que el sistema falle si falta un dato
+    columnas_reales = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']
+    for col in columnas_reales:
+        if col not in df.columns:
+            df[col] = 0
+    df[columnas_reales] = df[columnas_reales].fillna(0)
+
+    # 1. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
+    mapping = {
+        'Natacion': {'h': 'N_Mins', 's': 'N_Ses'},
+        'Ciclismo': {'h': 'B_Mins', 's': 'B_Ses'},
+        'Trote':    {'h': 'R_Mins', 's': 'R_Ses'}
+    }
+
+    for disc in mapping.keys():
+        h_plan_col = f"{disc}_Hrs_Plan"
+        s_plan_col = f"{disc}_Ses_Plan"
+        
+        def extraer_plan(atleta, col_name, val_global):
+            if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
+                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
+                return val if val > 0 else np.nan
+            return val_global if val_global > 0 else np.nan
+
+        df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
+        df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
+
+    # 2. CÁLCULOS TÉCNICOS
+    for d, cols in mapping.items():
+        df[f'VCI_{d}'] = (df[cols['h']] / (df[f'{d}_Hrs_Plan'] * 60)) * 100
+        df[f'SEI_{d}'] = (df[cols['real_s']] / df[f'{d}_Ses_Plan']) * 100
+        df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
+
+    # Limpieza de errores matemáticos
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    # 3. CLASIFICACIÓN Y BALANCE
+    for d in mapping.keys():
+        df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
+
+    # Cálculos Globales
+    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1, min_count=1)
+    ses_p_tot = df[['Natacion_Ses_Plan', 'Ciclismo_Ses_Plan', 'Trote_Ses_Plan']].sum(axis=1, min_count=1)
+    mins_r_tot = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
+    ses_r_tot = df['N_Ses'] + df['B_Ses'] + df['R_Ses']
+
+    df['VCI_Global'] = (mins_r_tot / (hrs_p_tot * 60)) * 100
+    df['SEI_Global'] = (ses_r_tot / ses_p_tot) * 100
+    df['TPI_Global'] = (0.4 * df['VCI_Global']) + (0.6 * df['SEI_Global'])
+    
+    # Índice de Balance (Estricto)
+    conteo_disc = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].notna().sum(axis=1)
+    df['Indice_Balance'] = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].std(axis=1, ddof=0)
+    df.loc[conteo_disc < 2, 'Indice_Balance'] = np.nan
+
+    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
+
+    return df
+    
 # *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
