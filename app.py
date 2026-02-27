@@ -889,30 +889,36 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
-# --- 7. INTERFAZ DE USUARIO (STREAMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
+# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
 # *****************************************************************************
 
 with st.sidebar:
     st.image("https://raw.githubusercontent.com/dagoperez/reportes-tym/main/logo_tym.png", width=150)
     st.title("Panel de Control")
     
-    # --- ENTRADA DE DATOS REALES ---
-    st.header("1️⃣ Datos Ejecutados")
-    st.info("Cargue lo que los atletas realizaron en la semana.")
+    # --- PARTE 1: LO REALIZADO (ENTRENAMIENTO) ---
+    st.header("1️⃣ Entrenamientos Realizados")
     
-    file_actividades = st.file_uploader("📂 Archivo de Actividades (Excel)", type=['xlsx', 'xls'], help="Suba el reporte exportado de la plataforma de seguimiento.")
+    # Este es el cuadro para tus datos de la Sem 08
+    area_texto_real = st.text_area(
+        "PEGAR DATOS AQUÍ (Texto/OCR):", 
+        height=300, 
+        placeholder="Pega aquí la lista: Francisco Ramírez 14h 22min..."
+    )
     
-    area_texto_real = st.text_area("📝 Lista de Tiempos (Pegar texto):", height=250, help="Pegue aquí el listado de nombres y tiempos de la semana (Ej: Francisco Ramírez 14h 22min).")
+    # Campo opcional, por si alguna vez tienes un archivo, pero NO es obligatorio
+    file_opcional = st.file_uploader("Subir archivo adicional (Opcional)", type=['xlsx', 'xls'])
 
     st.markdown("---")
 
-    # --- ENTRADA DE PLANIFICACIÓN (METAS) ---
+    # --- PARTE 2: LA PLANIFICACIÓN (METAS) ---
     st.header("2️⃣ Planificación (Metas)")
-    st.info("Defina el objetivo para calcular cumplimiento (KPI).")
     
-    file_plan_indiv = st.file_uploader("👤 Subir Plan Individual (Excel)", type=['xlsx'], help="Opcional: Use un Excel si cada atleta tiene metas distintas.")
+    # Modalidad A: Individual
+    file_plan_indiv = st.file_uploader("Subir Plan Individual (Excel)", type=['xlsx'])
 
-    with st.expander("🌍 Definir Plan Global (Para todo el equipo)"):
+    # Modalidad B: Global
+    with st.expander("Configurar Plan Global (Manual)"):
         st.write("Si no hay plan individual, se usarán estos valores:")
         p_n_h = st.number_input("Natación (Horas meta)", value=0.0, step=0.5)
         p_n_s = st.number_input("Natación (Sesiones meta)", value=0, step=1)
@@ -934,35 +940,32 @@ with st.sidebar:
     st.markdown("---")
     num_semana_procesar = st.number_input("Semana a procesar:", min_value=1, max_value=53, value=8)
     
-    # --- BOTÓN DE ACCIÓN ---
-    if st.button("🚀 GENERAR ANÁLISIS DE CUMPLIMIENTO"):
-        if area_texto_real or file_actividades:
-            # 1. Procesar Datos Reales
-            df_real_text = parse_ocr_data(area_texto_real) if area_texto_real else pd.DataFrame()
+    # --- BOTÓN DE PROCESAMIENTO ---
+    if st.button("🚀 GENERAR REPORTE"):
+        if area_texto_real:
+            # Procesa el texto que pegaste (Francisco Ramírez, etc.)
+            df_resultados = parse_ocr_data(area_texto_real)
             
-            if file_actividades:
-                # Aquí se usa la lógica interna de procesamiento de archivos
-                df_real_file = parse_strava_data(file_actividades) # La función interna se mantiene, el nombre externo cambia
-                df_resultados = pd.concat([df_real_text, df_real_file], ignore_index=True)
+            # Si además subiste un archivo opcional, los combina
+            if file_opcional:
+                df_file = parse_strava_data(file_opcional)
+                df_resultados = pd.concat([df_resultados, df_file], ignore_index=True)
                 df_resultados = df_resultados.groupby('Deportista', as_index=False).sum()
-            else:
-                df_resultados = df_real_text
 
-            # 2. Motor de Cumplimiento (KPI)
-            # Si no hay plan (global e individual en 0), la función devuelve los datos sin error
+            # Calcula KPIs (Si hay plan configurado)
             df_resultados = calcular_metricas_cumplimiento(df_resultados, df_plan_indiv, dict_plan_global)
             
             st.session_state['df_resultados'] = df_resultados
             st.session_state['procesado_ok'] = True
         else:
-            st.warning("Debe ingresar al menos una fuente de datos reales (Archivo o Texto).")
+            st.warning("Por favor, pega los datos de entrenamiento en el cuadro de texto.")
 
-# --- VISUALIZACIÓN DE RESULTADOS ---
+# --- MOSTRAR RESULTADOS ---
 if st.session_state.get('procesado_ok'):
-    st.header(f"📊 Reporte de Cumplimiento - Semana {num_semana_procesar}")
+    st.header(f"📊 Análisis de la Semana {num_semana_procesar}")
     df_res = st.session_state['df_resultados']
     
-    # Formato de porcentaje solo si existen las columnas de KPI
+    # Si hay KPIs calculados, mostrar con formato %
     cols_kpi = [c for c in df_res.columns if any(k in c for k in ['VCI', 'TPI', 'SEI'])]
     if cols_kpi:
         st.dataframe(df_res.style.format("{:.1f}%", subset=cols_kpi))
