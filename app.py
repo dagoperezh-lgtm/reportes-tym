@@ -297,6 +297,93 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     return comentario_final
 
 # *****************************************************************************
+# --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
+# *****************************************************************************
+
+def clasificar_cumplimiento(valor):
+    """Escala interpretativa para el Training Performance Index (TPI)."""
+    if pd.isna(valor): return "NC"
+    if valor > 105:   return "Sobrecarga"
+    if valor >= 95:  return "Óptimo"
+    if valor >= 85:  return "Parcial"
+    return "Riesgo"
+
+def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
+    """
+    Sistema robusto de métricas de cumplimiento para triatlón.
+    Calcula VCI (Volumen), SEI (Sesiones) y TPI (Ponderación 40/60).
+    Mantiene integridad numérica y jerarquía de carga (Individual > Global).
+    """
+    df = df_reales.copy()
+    
+    # Mapeo de columnas de entrada según tu Sección 4
+    mapping = {
+        'Natacion': {'real_h': 'N_Mins', 'real_s': 'N_Ses'},
+        'Ciclismo': {'real_h': 'B_Mins', 'real_s': 'B_Ses'},
+        'Trote':    {'real_h': 'R_Mins', 'real_s': 'R_Ses'}
+    }
+
+    # 1. ROBUSTEZ: Asegurar que los datos reales existan y no sean NaN
+    columnas_reales = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']
+    for col in columnas_reales:
+        if col not in df.columns:
+            df[col] = 0
+    
+    # 🛡️ Blindaje: Si hay minutos pero 0 sesiones, asimilamos al menos 1 sesión
+    df['N_Ses'] = df.apply(lambda r: 1 if r['N_Mins'] > 0 and r['N_Ses'] == 0 else r['N_Ses'], axis=1)
+    df['B_Ses'] = df.apply(lambda r: 1 if r['B_Mins'] > 0 and r['B_Ses'] == 0 else r['B_Ses'], axis=1)
+    df['R_Ses'] = df.apply(lambda r: 1 if r['R_Mins'] > 0 and r['R_Ses'] == 0 else r['R_Ses'], axis=1)
+    
+    df[columnas_reales] = df[columnas_reales].fillna(0)
+
+    # 2. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
+    for disc in mapping.keys():
+        h_plan_col = f"{disc}_Hrs_Plan"
+        s_plan_col = f"{disc}_Ses_Plan"
+        
+        def extraer_plan(atleta, col_name, val_global):
+            # Si existe plan individual y el atleta está en él, tiene prioridad
+            if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
+                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
+                return val if val > 0 else np.nan
+            # Si no, se usa el valor global definido en la interfaz
+            return val_global if val_global > 0 else np.nan
+
+        df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
+        df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
+
+    # 3. CÁLCULOS POR DISCIPLINA (VCI, SEI, TPI)
+    for d, cols in mapping.items():
+        # VCI (Volumen) y SEI (Sesiones) con protección contra división por cero
+        df[f'VCI_{d}'] = df.apply(lambda r: (r[cols['real_h']] / (r[f'{d}_Hrs_Plan'] * 60)) * 100 if r[f'{d}_Hrs_Plan'] > 0 else np.nan, axis=1)
+        df[f'SEI_{d}'] = df.apply(lambda r: (r[cols['real_s']] / r[f'{d}_Ses_Plan']) * 100 if r[f'{d}_Ses_Plan'] > 0 else np.nan, axis=1)
+        
+        # TPI (Ponderación 40% Volumen / 60% Constancia)
+        df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}'].fillna(0)) + (0.6 * df[f'SEI_{d}'].fillna(0))
+        
+        # Clasificación por disciplina
+        df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
+
+    # 4. CÁLCULOS GLOBALES SEMANALES
+    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1, min_count=1)
+    ses_p_tot = df[['Natacion_Ses_Plan', 'Ciclismo_Ses_Plan', 'Trote_Ses_Plan']].sum(axis=1, min_count=1)
+    mins_r_tot = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
+    ses_r_tot = df['N_Ses'] + df['B_Ses'] + df['R_Ses']
+
+    df['VCI_Global'] = (mins_r_tot / (hrs_p_tot * 60)) * 100
+    df['SEI_Global'] = (ses_r_tot / ses_p_tot) * 100
+    df['TPI_Global'] = (0.4 * df['VCI_Global'].fillna(0)) + (0.6 * df['SEI_Global'].fillna(0))
+    
+    # Índice de Balance (Desviación estándar de cumplimiento entre las 3 disciplinas)
+    df['Indice_Balance'] = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].std(axis=1)
+
+    # Limpieza final de infinitos y clasificación global
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
+
+    return df
+
+# *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
 
@@ -811,83 +898,123 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
-# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
+# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.30 ---
 # *****************************************************************************
 
-st.sidebar.header("📁 Gestión de Datos Históricos TYM")
-cargador_maestro_excel = st.sidebar.file_uploader("Cargar Excel Maestro", type=["xlsx"])
-num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
-area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):")
-area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
+with st.sidebar:
+    st.image("https://raw.githubusercontent.com/dagoperez/reportes-tym/main/logo_tym.png", width=150)
+    st.title("Panel de Control")
+    
+    st.header("📂 Gestión de Base de Datos")
+    # Cambio solicitado: Renombrado quirúrgico del cargador
+    cargador_maestro_excel = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"], help="Cargue el Excel que contiene la evolución de todas las semanas anteriores.")
+    num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
+    
+    st.markdown("---")
+    
+    # --- PARTE 1: DATOS REALES (EJECUTADOS) ---
+    st.subheader("1️⃣ Entrenamientos Ejecutados")
+    area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):", height=150)
+    area_texto_ocr = st.text_area("2. Datos OCR (Traducción):", height=150)
 
-# Contenedor para mantener los resultados visibles tras la interacción
-contenedor_resultados = st.container()
+    st.markdown("---")
 
-if st.button("🚀 PROCESAR JORNADA"):
-    if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
-        # Procesar Parsing y guardarlo en el estado de la sesión para persistencia
-        st.session_state['df_resultados'] = parse_raw_data(area_texto_strava)
-        st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
-        st.session_state['procesado_ok'] = True
-    else:
-        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
+    # --- PARTE 2: PLANIFICACIÓN (METAS) ---
+    st.subheader("2️⃣ Planificación (Metas)")
+    
+    # Nuevo: Selector de archivo de plan (Individual o Global)
+    file_plan = st.file_uploader("👤 Subir Archivo de Plan (Excel)", type=['xlsx'])
 
-# Lógica de despliegue fuera del botón para que no desaparezca al interactuar
+    with st.expander("🌍 Configuración Manual (Si no hay archivo)"):
+        st.write("Metas base para la semana:")
+        p_n_h = st.number_input("Natación (Horas meta)", value=3.0, step=0.5)
+        p_n_s = st.number_input("Natación (Sesiones meta)", value=3, step=1)
+        p_b_h = st.number_input("Ciclismo (Horas meta)", value=4.0, step=0.5)
+        p_b_s = st.number_input("Ciclismo (Sesiones meta)", value=3, step=1)
+        p_t_h = st.number_input("Trote (Horas meta)", value=1.5, step=0.5)
+        p_t_s = st.number_input("Trote (Sesiones meta)", value=2, step=1)
+
+    dict_plan_global = {
+        'Natacion_Hrs_Plan': p_n_h, 'Natacion_Ses_Plan': p_n_s,
+        'Ciclismo_Hrs_Plan': p_b_h, 'Ciclismo_Ses_Plan': p_b_s,
+        'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
+    }
+    
+    # Lógica de detección de tipo de Plan
+    df_plan_indiv = None
+    if file_plan:
+        df_temp = pd.read_excel(file_plan)
+        if 'Deportista' in df_temp.columns:
+            df_plan_indiv = df_temp 
+        else:
+            for k in dict_plan_global.keys():
+                if k in df_temp.columns: dict_plan_global[k] = df_temp.iloc[0][k]
+
+    st.markdown("---")
+    
+    # Contenedor para resultados visibles
+    contenedor_resultados = st.container()
+
+    if st.button("🚀 PROCESAR JORNADA"):
+        if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
+            # 1. Procesar Parsing (Sección 4)
+            df_raw = parse_raw_data(area_texto_strava)
+            st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
+            
+            # 2. Calcular Cumplimiento (Nueva Sección 3B)
+            df_resultados = calcular_metricas_cumplimiento(df_raw, df_plan_indiv, dict_plan_global)
+            
+            st.session_state['df_resultados'] = df_resultados
+            st.session_state['procesado_ok'] = True
+        else:
+            st.error("Error: Falta el Archivo Histórico o los datos de la semana.")
+
+# --- CUERPO PRINCIPAL (VISUALIZACIÓN Y REPORTES) ---
 if st.session_state.get('procesado_ok'):
-    df_resultados = st.session_state['df_resultados']
+    df_res = st.session_state['df_resultados']
     d_p_dist, d_p_larg = st.session_state['podios_ocr']
     
     with contenedor_resultados:
         st.success(f"¡Semana {num_semana_procesar} procesada!")
+        
+        # Nueva Tabla de Vista Previa con KPIs de Adherencia
+        st.subheader("📊 Vista Previa de Cumplimiento (TPI)")
+        cols_kpi = ['Deportista', 'TPI_Global', 'Estado_Cumplimiento', 'VCI_Global', 'SEI_Global', 'Indice_Balance']
+        st.dataframe(df_res[cols_kpi].style.format("{:.1f}%", subset=['TPI_Global', 'VCI_Global', 'SEI_Global']))
+
+        st.divider()
         col1, col2 = st.columns(2)
         
-        # 1. Descargas Grupales
+        # 1. Descargas Grupales (Restauradas íntegramente)
         col1.download_button(label="📄 REPORTE WORD GRUPAL", 
-                             data=generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), 
-                             file_name=f"Reporte_TYM_{num_semana_procesar}.docx")
+                             data=generar_reporte_word_tym_completo(df_res, num_semana_procesar, d_p_dist, d_p_larg), 
+                             file_name=f"Reporte_TYM_Sem_{num_semana_procesar}.docx")
         
-        col2.download_button(label="📊 EXCEL ACTUALIZADO", 
-                             data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), 
-                             file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
+        col2.download_button(label="📊 EXCEL HISTÓRICO ACTUALIZADO", 
+                             data=crear_excel_actualizado(cargador_maestro_excel, df_res, num_semana_procesar), 
+                             file_name=f"Historico_Actualizado_{num_semana_procesar}.xlsx")
         
-        # 2. Sección de Insights Individuales (Ahora persistente)
+        # 2. Sección de Insights Individuales (ZIP)
         st.divider()
-        st.subheader("👤 Generador de Reportes Individuales (Insights)")
+        st.subheader("👤 Generador de Reportes Individuales (ZIP)")
         
-        # Carga de históricos
         h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
-        h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
-        h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
-        h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
+        h_n = pd.read_excel(cargador_maestro_excel, sheet_name=\"Natación\", dtype=object)
+        h_c = pd.read_excel(cargador_maestro_excel, sheet_name=\"Ciclismo\", dtype=object)
+        h_r = pd.read_excel(cargador_maestro_excel, sheet_name=\"Trote\", dtype=object)
         dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
         
-       # --- LÓGICA DE SELECCIÓN FILTRADA POR ACTIVIDAD ---
-        # Filtramos solo a los atletas que sumaron minutos en la semana actual
-        df_activos = df_resultados[df_resultados['T_Mins'] > 0]
-        atletas_activos_list = df_activos['Deportista'].tolist()
+        df_activos = df_res[df_res['T_Mins'] > 0]
+        atletas_list = df_activos['Deportista'].tolist()
         
-        st.write(f"ℹ️ Se detectaron {len(atletas_activos_list)} atletas con actividad esta semana.")
-        
-        # Checkbox para selección masiva de activos
-        seleccionar_todos = st.checkbox(f"Seleccionar los {len(atletas_activos_list)} atletas activos")
-        
-        if seleccionar_todos:
-            seleccionados = st.multiselect("Atletas para reporte personal:", atletas_activos_list, default=atletas_activos_list)
-        else:
-            seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_activos_list)
-        # --------------------------------------------------
+        seleccionados = st.multiselect("Seleccionar Atletas para reporte:", atletas_list)
         
         if seleccionados:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for a_sel in seleccionados:
-                    r_indiv = generar_reporte_narrativo_individual(a_sel, df_resultados, dict_h_ref, num_semana_procesar)
+                    r_indiv = generar_reporte_narrativo_individual(a_sel, df_res, dict_h_ref, num_semana_procesar)
                     if r_indiv:
                         zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
             
-            st.download_button(
-                label="⬇️ DESCARGAR ZIP INDIVIDUALES", 
-                data=zip_buffer.getvalue(), 
-                file_name=f"Individuales_Sem_{num_semana_procesar}.zip", 
-                mime="application/zip"
-            )
+            st.download_button(label="⬇️ DESCARGAR ZIP", data=zip_buffer.getvalue(), file_name=f"Individuales_Sem_{num_semana_procesar}.zip")
