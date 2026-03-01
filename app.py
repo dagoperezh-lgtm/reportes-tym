@@ -906,7 +906,7 @@ with st.sidebar:
     st.title("Panel de Control")
     
     st.header("📂 Gestión de Base de Datos")
-    # Cambio solicitado: Renombrado quirúrgico del cargador
+    # Cargador con el nombre solicitado
     cargador_maestro_excel = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"], help="Cargue el Excel que contiene la evolución de todas las semanas anteriores.")
     num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
     
@@ -922,10 +922,10 @@ with st.sidebar:
     # --- PARTE 2: PLANIFICACIÓN (METAS) ---
     st.subheader("2️⃣ Planificación (Metas)")
     
-    # Nuevo: Selector de archivo de plan (Individual o Global)
+    # Selector de archivo de plan
     file_plan = st.file_uploader("👤 Subir Archivo de Plan (Excel)", type=['xlsx'])
 
-    with st.expander("🌍 Configuración Manual (Si no hay archivo)"):
+    with st.expander("🌍 Configuración Manual"):
         st.write("Metas base para la semana:")
         p_n_h = st.number_input("Natación (Horas meta)", value=3.0, step=0.5)
         p_n_s = st.number_input("Natación (Sesiones meta)", value=3, step=1)
@@ -940,7 +940,6 @@ with st.sidebar:
         'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
     }
     
-    # Lógica de detección de tipo de Plan
     df_plan_indiv = None
     if file_plan:
         df_temp = pd.read_excel(file_plan)
@@ -951,17 +950,15 @@ with st.sidebar:
                 if k in df_temp.columns: dict_plan_global[k] = df_temp.iloc[0][k]
 
     st.markdown("---")
-    
-    # Contenedor para resultados visibles
     contenedor_resultados = st.container()
 
     if st.button("🚀 PROCESAR JORNADA"):
         if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
-            # 1. Procesar Parsing (Sección 4)
+            # 1. Procesar Parsing
             df_raw = parse_raw_data(area_texto_strava)
             st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
             
-            # 2. Calcular Cumplimiento (Nueva Sección 3B)
+            # 2. Calcular Cumplimiento (Adherencia Sección 3B)
             df_resultados = calcular_metricas_cumplimiento(df_raw, df_plan_indiv, dict_plan_global)
             
             st.session_state['df_resultados'] = df_resultados
@@ -977,7 +974,7 @@ if st.session_state.get('procesado_ok'):
     with contenedor_resultados:
         st.success(f"¡Semana {num_semana_procesar} procesada!")
         
-        # Nueva Tabla de Vista Previa con KPIs de Adherencia
+        # Tabla de Vista Previa con los nuevos KPIs de Adherencia
         st.subheader("📊 Vista Previa de Cumplimiento (TPI)")
         cols_kpi = ['Deportista', 'TPI_Global', 'Estado_Cumplimiento', 'VCI_Global', 'SEI_Global', 'Indice_Balance']
         st.dataframe(df_res[cols_kpi].style.format("{:.1f}%", subset=['TPI_Global', 'VCI_Global', 'SEI_Global']))
@@ -985,7 +982,7 @@ if st.session_state.get('procesado_ok'):
         st.divider()
         col1, col2 = st.columns(2)
         
-        # 1. Descargas Grupales (Restauradas íntegramente)
+        # 1. Descargas Grupales
         col1.download_button(label="📄 REPORTE WORD GRUPAL", 
                              data=generar_reporte_word_tym_completo(df_res, num_semana_procesar, d_p_dist, d_p_larg), 
                              file_name=f"Reporte_TYM_Sem_{num_semana_procesar}.docx")
@@ -998,10 +995,11 @@ if st.session_state.get('procesado_ok'):
         st.divider()
         st.subheader("👤 Generador de Reportes Individuales (ZIP)")
         
+        # Carga limpia de hojas para comparativa histórica
         h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
-        h_n = pd.read_excel(cargador_maestro_excel, sheet_name=\"Natación\", dtype=object)
-        h_c = pd.read_excel(cargador_maestro_excel, sheet_name=\"Ciclismo\", dtype=object)
-        h_r = pd.read_excel(cargador_maestro_excel, sheet_name=\"Trote\", dtype=object)
+        h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
+        h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
+        h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
         dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
         
         df_activos = df_res[df_res['T_Mins'] > 0]
@@ -1017,4 +1015,6 @@ if st.session_state.get('procesado_ok'):
                     if r_indiv:
                         zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
             
-            st.download_button(label="⬇️ DESCARGAR ZIP", data=zip_buffer.getvalue(), file_name=f"Individuales_Sem_{num_semana_procesar}.zip")
+            st.download_button(label="⬇️ DESCARGAR ZIP INDIVIDUALES", 
+                               data=zip_buffer.getvalue(), 
+                               file_name=f"Individuales_Sem_{num_semana_procesar}.zip")
