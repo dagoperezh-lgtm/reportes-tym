@@ -311,12 +311,12 @@ def clasificar_cumplimiento(valor):
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
     """
     Sistema de métricas de cumplimiento TYM. 
-    Calcula TPI y restaura métricas legacy (CV) para compatibilidad con Sección 5.
+    Asegura limpieza de datos para evitar errores en gráficos de Sección 5.
     """
     df = df_reales.copy()
     
     # 1. BLINDAJE DE IDENTIDAD: Sincronizar columna de nombres
-    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete']
+    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete', 'NOMBRE', 'DEPORTISTA']
     col_identidad = next((c for c in df.columns if c in posibles_nombres), df.columns[0])
     df.rename(columns={col_identidad: 'Deportista'}, inplace=True)
 
@@ -326,10 +326,14 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         'Trote':    {'real_h': 'R_Mins', 'real_s': 'R_Ses'}
     }
 
-    # Asegurar existencia de columnas base
-    for col in ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']:
-        if col not in df.columns: df[col] = 0
-    df.fillna(0, inplace=True)
+    # Asegurar existencia de columnas base y LIMPIEZA TOTAL de NaN
+    columnas_clave = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses', 'T_Mins']
+    for col in columnas_clave:
+        if col not in df.columns: 
+            df[col] = 0
+    
+    # Reemplazar NaN por 0 para evitar fallos en Matplotlib (Gráficos)
+    df[columnas_clave] = df[columnas_clave].fillna(0)
 
     # 2. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
     for disc in mapping.keys():
@@ -361,18 +365,21 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         return "✅ Cumplimiento óptimo"
     df['Nota_Coach'] = df.apply(generar_nota, axis=1)
 
-    # 5. RESTAURACIÓN DE MÉTRICAS PARA SECCIÓN 5 (REPORTE WORD)
-    # Calculamos el CV (Coeficiente de Variación) para identificar triatletas completos
+    # 5. RESTAURACIÓN DE MÉTRICAS LEGACY (PARA SECCIÓN 5)
     def calcular_cv_legacy(r):
         valores = [r['N_Mins'], r['B_Mins'], r['R_Mins']]
         if sum(valores) == 0: return 'NC'
-        # Si tiene las 3 disciplinas, calculamos el CV numérico
         if all(v > 0 for v in valores):
             return round(np.std(valores) / np.mean(valores), 4)
-        return 'NC' # No es triatleta completo esta semana
+        return 'NC'
 
     df['CV'] = df.apply(calcular_cv_legacy, axis=1)
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
+    
+    # Forzar que si el total es 0, no sea NaN sino 0.0 para Matplotlib
+    df['N_Mins'] = df['N_Mins'].astype(float).fillna(0.0)
+    df['B_Mins'] = df['B_Mins'].astype(float).fillna(0.0)
+    df['R_Mins'] = df['R_Mins'].astype(float).fillna(0.0)
 
     return df
     
