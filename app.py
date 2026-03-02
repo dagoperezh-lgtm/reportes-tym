@@ -904,15 +904,6 @@ if st.button("🚀 PROCESAR JORNADA"):
     else:
         st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
 
-if st.button("🚀 PROCESAR JORNADA"):
-    if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
-        # Procesar Parsing y guardarlo en el estado de la sesión para persistencia
-        st.session_state['df_resultados'] = parse_raw_data(area_texto_strava)
-        st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
-        st.session_state['procesado_ok'] = True
-    else:
-        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
-
 # Lógica de despliegue fuera del botón para que no desaparezca al interactuar
 if st.session_state.get('procesado_ok'):
     df_resultados = st.session_state['df_resultados']
