@@ -297,79 +297,6 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     return comentario_final
 
 # *****************************************************************************
-# --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
-# *****************************************************************************
-
-def asegurar_aritmetica_funcional(valor):
-    """
-    PRUEBA BÁSICA DE INGENIERÍA:
-    1. Si es número (int/float), se mantiene (ya es minutos).
-    2. Si es texto o tiempo, usa to_mins para convertirlo.
-    """
-    if pd.isna(valor) or valor == 0: return 0.0
-    # 🛡️ REGLA: Si ya es un número funcional, no aplicar transformación.
-    if isinstance(valor, (int, float)): return float(valor)
-    # Si es texto (HH:MM:SS), usamos tu función de la Sección 2
-    return to_mins(valor)
-
-def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
-    df = df_reales.copy()
-    
-    # 1. LIMPIEZA DE COLUMNAS (Evita KeyErrors por espacios o tildes)
-    df.columns = [clean_string(c) for c in df.columns]
-    
-    # 2. SINCRONIZACIÓN DE IDENTIDAD
-    # Mapeamos los conceptos del Excel a las variables del motor
-    mapeo = {'NATACION': 'N_Mins', 'BICICLETA': 'B_Mins', 'CICLISMO': 'B_Mins', 'TROTE': 'R_Mins'}
-    df.rename(columns=mapeo, inplace=True)
-    for c in df.columns:
-        if c in ['NOMBRE', 'ATLETA', 'DEPORTISTA']: df.rename(columns={c: 'Deportista'}, inplace=True)
-
-    # 3. PROCESAMIENTO ARITMÉTICO (Tu prueba básica)
-    for col in ['N_Mins', 'B_Mins', 'R_Mins']:
-        if col in df.columns:
-            df[col] = df[col].apply(asegurar_aritmetica_funcional)
-        else:
-            df[col] = 0.0
-    
-    df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
-
-    # 4. LÓGICA DE CASCADA (REGLA: Individual > Global)
-    for d in ['Natacion', 'Ciclismo', 'Trote']:
-        h_plan, s_plan = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
-        col_real = 'N_Mins' if d=='Natacion' else 'B_Mins' if d=='Ciclismo' else 'R_Mins'
-        
-        def obtener_meta(atl, m_col, v_glob):
-            if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
-                match = df_plan_indiv[df_plan_indiv['Deportista'].apply(clean_string) == clean_string(atl)]
-                if not match.empty:
-                    v = match[m_col].values[0] if m_col in match.columns else 0
-                    return v if (pd.notna(v) and v > 0) else v_glob
-            return v_glob
-
-        df[h_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
-        df[s_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
-
-        # KPIs TPI (40/60)
-        df[f'VCI_{d}'] = (df[col_real] / (df[h_plan] * 60)) * 100
-        df[f'SEI_{d}'] = (df[col_real].apply(lambda x: 1 if x > 0 else 0) / df[s_plan]) * 100
-        df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}'].fillna(0)) + (0.6 * df[f'SEI_{d}'].fillna(0))
-
-    # 5. GARANTÍA DE COLUMNAS PARA LA INTERFAZ (Evita el KeyError)
-    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['TPI_Global'] = (df['T_Mins'] / (hrs_p_tot * 60)) * 100
-    df['TPI_Global'] = df['TPI_Global'].fillna(0)
-    
-    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else "Riesgo")
-    df['Nota_Coach'] = df.apply(lambda r: "✅ Datos Procesados" if r['T_Mins'] > 0 else "⚠️ Sin actividad", axis=1)
-    
-    # Suministro para reporte Word
-    df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
-    df['Tiempo Total'] = df['T_Mins'].apply(to_hhmmss_display)
-
-    return df
-    
-# *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
 
@@ -884,65 +811,83 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
-# --- 7. INTERFAZ DE USUARIO (STREMLIT) - V2.2.31 ---
+# --- 7. INTERFAZ DE USUARIO (STREMLIT) - VERSIÓN PERSISTENTE V2.2.28 ---
 # *****************************************************************************
 
-with st.sidebar:
-    st.image("https://raw.githubusercontent.com/dagoperez/reportes-tym/main/logo_tym.png", width=150)
-    st.title("Configuración")
-    
-    cargador_maestro_excel = st.file_uploader("📂 Sube el histórico", type=["xlsx"])
-    cargador_semana_excel = st.file_uploader("🏃 Sube la semana (Sem 08)", type=["xlsx"])
-    num_semana_procesar = st.text_input("Semana:", "08")
-    
-    st.divider()
-    file_plan = st.file_uploader("👤 Plan Individual", type=['xlsx'])
-    
-    with st.expander("🌍 Metas Club"):
-        p_n_h = st.number_input("Natación (Hrs)", 3.0)
-        p_n_s = st.number_input("Natación (Ses)", 3)
-        p_b_h = st.number_input("Ciclismo (Hrs)", 4.0)
-        p_b_s = st.number_input("Ciclismo (Ses)", 3)
-        p_t_h = st.number_input("Trote (Hrs)", 1.5)
-        p_t_s = st.number_input("Trote (Ses)", 2)
+st.sidebar.header("📁 Gestión de Datos Históricos TYM")
+cargador_maestro_excel = st.sidebar.file_uploader("Cargar Excel Maestro", type=["xlsx"])
+num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
+area_texto_strava = st.text_area("1. Datos Tiempo Total (Strava):")
+area_texto_ocr = st.text_area("2. Datos OCR (Traducción):")
 
-    dict_plan_global = {
-        'Natacion_Hrs_Plan': p_n_h, 'Natacion_Ses_Plan': p_n_s,
-        'Ciclismo_Hrs_Plan': p_b_h, 'Ciclismo_Ses_Plan': p_b_s,
-        'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
-    }
+# Contenedor para mantener los resultados visibles tras la interacción
+contenedor_resultados = st.container()
 
-    if st.button("🚀 PROCESAR"):
-        if cargador_maestro_excel and cargador_semana_excel:
-            # Procesamos el Excel Semanal
-            df_reales = pd.read_excel(cargador_semana_excel)
-            # Procesamos el Plan Individual (si existe)
-            df_plan_indiv = pd.read_excel(file_plan) if file_plan else None
+if st.button("🚀 PROCESAR JORNADA"):
+    if cargador_maestro_excel and area_texto_strava.strip() and area_texto_ocr.strip():
+        # Procesar Parsing y guardarlo en el estado de la sesión para persistencia
+        st.session_state['df_resultados'] = parse_raw_data(area_texto_strava)
+        st.session_state['podios_ocr'] = parse_ocr_data(area_texto_ocr)
+        st.session_state['procesado_ok'] = True
+    else:
+        st.error("Error Mandatorio: Excel y campos de texto no pueden estar vacíos.")
+
+# Lógica de despliegue fuera del botón para que no desaparezca al interactuar
+if st.session_state.get('procesado_ok'):
+    df_resultados = st.session_state['df_resultados']
+    d_p_dist, d_p_larg = st.session_state['podios_ocr']
+    
+    with contenedor_resultados:
+        st.success(f"¡Semana {num_semana_procesar} procesada!")
+        col1, col2 = st.columns(2)
+        
+        # 1. Descargas Grupales
+        col1.download_button(label="📄 REPORTE WORD GRUPAL", 
+                             data=generar_reporte_word_tym_completo(df_resultados, num_semana_procesar, d_p_dist, d_p_larg), 
+                             file_name=f"Reporte_TYM_{num_semana_procesar}.docx")
+        
+        col2.download_button(label="📊 EXCEL ACTUALIZADO", 
+                             data=crear_excel_actualizado(cargador_maestro_excel, df_resultados, num_semana_procesar), 
+                             file_name=f"00_Estadisticas_Actualizadas_{num_semana_procesar}.xlsx")
+        
+        # 2. Sección de Insights Individuales (Ahora persistente)
+        st.divider()
+        st.subheader("👤 Generador de Reportes Individuales (Insights)")
+        
+        # Carga de históricos
+        h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
+        h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
+        h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
+        h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
+        dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
+        
+       # --- LÓGICA DE SELECCIÓN FILTRADA POR ACTIVIDAD ---
+        # Filtramos solo a los atletas que sumaron minutos en la semana actual
+        df_activos = df_resultados[df_resultados['T_Mins'] > 0]
+        atletas_activos_list = df_activos['Deportista'].tolist()
+        
+        st.write(f"ℹ️ Se detectaron {len(atletas_activos_list)} atletas con actividad esta semana.")
+        
+        # Checkbox para selección masiva de activos
+        seleccionar_todos = st.checkbox(f"Seleccionar los {len(atletas_activos_list)} atletas activos")
+        
+        if seleccionar_todos:
+            seleccionados = st.multiselect("Atletas para reporte personal:", atletas_activos_list, default=atletas_activos_list)
+        else:
+            seleccionados = st.multiselect("Seleccionar Atletas para reporte personal:", atletas_activos_list)
+        # --------------------------------------------------
+        
+        if seleccionados:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zf:
+                for a_sel in seleccionados:
+                    r_indiv = generar_reporte_narrativo_individual(a_sel, df_resultados, dict_h_ref, num_semana_procesar)
+                    if r_indiv:
+                        zf.writestr(f"Reporte_{clean_string(a_sel)}.docx", r_indiv.getvalue())
             
-            # Ejecutamos el motor de adherencia sincronizado
-            st.session_state['df_res'] = calcular_metricas_cumplimiento(df_reales, df_plan_indiv, dict_plan_global)
-            st.session_state['ok'] = True
-
-if st.session_state.get('ok'):
-    df_res = st.session_state['df_res']
-    
-    st.header(f"📊 Análisis Semana {num_semana_procesar}")
-    
-    # KPIs visuales basados en aritmética real
-    c1, c2, c3 = st.columns(3)
-    c1.metric("TPI Club", f"{df_res['TPI_Global'].mean():.1f}%")
-    c2.metric("Óptimos", len(df_res[df_res['Estado_Cumplimiento']=='Óptimo']))
-    c3.metric("Riesgo", len(df_res[df_res['Estado_Cumplimiento']=='Riesgo']))
-
-    st.subheader("📋 Tabla de Control")
-    cols_v = ['Deportista', 'TPI_Global', 'Estado_Cumplimiento', 'Nota_Coach']
-    st.dataframe(df_res[cols_v].style.format("{:.1f}%", subset=['TPI_Global']))
-
-    st.divider()
-    st.subheader("📥 Reportes")
-    col1, col2 = st.columns(2)
-    with col1:
-        # Aquí el Word ya no fallará porque los minutos son números funcionales
-        st.download_button("📄 REPORTE WORD", generar_reporte_word_tym_completo(df_res, num_semana_procesar, "N/A", "N/A"), f"Reporte_{num_semana_procesar}.docx")
-    with col2:
-        st.download_button("📊 EXCEL ACTUALIZADO", crear_excel_actualizado(cargador_maestro_excel, df_res, num_semana_procesar), f"Historico_{num_semana_procesar}.xlsx")
+            st.download_button(
+                label="⬇️ DESCARGAR ZIP INDIVIDUALES", 
+                data=zip_buffer.getvalue(), 
+                file_name=f"Individuales_Sem_{num_semana_procesar}.zip", 
+                mime="application/zip"
+            )
