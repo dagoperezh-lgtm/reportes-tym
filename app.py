@@ -310,14 +310,13 @@ def clasificar_cumplimiento(valor):
 
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
     """
-    Sistema robusto de métricas de cumplimiento para triatlón.
-    Mantiene integridad numérica y jerarquía de carga (Individual > Global).
+    Sistema de métricas de cumplimiento TYM. 
+    Calcula TPI y restaura métricas legacy (CV) para compatibilidad con Sección 5.
     """
     df = df_reales.copy()
     
-    # --- BLINDAJE DE IDENTIDAD ---
-    # Buscamos la columna de nombres sin importar cómo se llame en el Excel semanal
-    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete', 'NOMBRE', 'DEPORTISTA']
+    # 1. BLINDAJE DE IDENTIDAD: Sincronizar columna de nombres
+    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete']
     col_identidad = next((c for c in df.columns if c in posibles_nombres), df.columns[0])
     df.rename(columns={col_identidad: 'Deportista'}, inplace=True)
 
@@ -327,60 +326,56 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         'Trote':    {'real_h': 'R_Mins', 'real_s': 'R_Ses'}
     }
 
-    # 1. ROBUSTEZ: Asegurar que existan las columnas de minutos y sesiones
-    columnas_reales = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']
-    for col in columnas_reales:
-        if col not in df.columns:
-            df[col] = 0
-    df[columnas_reales] = df[columnas_reales].fillna(0)
+    # Asegurar existencia de columnas base
+    for col in ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']:
+        if col not in df.columns: df[col] = 0
+    df.fillna(0, inplace=True)
 
     # 2. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
     for disc in mapping.keys():
-        h_plan_col = f"{disc}_Hrs_Plan"
-        s_plan_col = f"{disc}_Ses_Plan"
-        
+        h_plan_col, s_plan_col = f"{disc}_Hrs_Plan", f"{disc}_Ses_Plan"
         def extraer_plan(atleta, col_name, val_global):
             if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
                 val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
                 return val if val > 0 else np.nan
             return val_global if val_global > 0 else np.nan
-
         df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
         df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
 
-    # 3. CÁLCULOS TPI (40/60)
+    # 3. CÁLCULOS TPI (Adherencia 40/60)
     for d, cols in mapping.items():
         df[f'VCI_{d}'] = df.apply(lambda r: (r[cols['real_h']] / (r[f'{d}_Hrs_Plan'] * 60)) * 100 if r[f'{d}_Hrs_Plan'] > 0 else 0, axis=1)
         df[f'SEI_{d}'] = df.apply(lambda r: (r[cols['real_s']] / r[f'{d}_Ses_Plan']) * 100 if r[f'{d}_Ses_Plan'] > 0 else 0, axis=1)
-        
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
         df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
 
-    # 4. CÁLCULOS GLOBALES
+    # 4. CÁLCULOS GLOBALES Y NOTA EXPLICATIVA
     hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
     df['TPI_Global'] = (df['N_Mins'] + df['B_Mins'] + df['R_Mins']) / (hrs_p_tot * 60) * 100
     df['TPI_Global'] = df['TPI_Global'].replace([np.inf, -np.inf], 0).fillna(0)
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
     
-    # 5. KPI AUTOEXPLICATIVO (Nota del Coach)
     def generar_nota(r):
-        if r['TPI_Global'] == 0: return "⚠️ Sin actividad en la semana"
-        if r['TPI_Global'] < 85:
-            faltantes = []
-            if r['TPI_Natacion'] < 80: faltantes.append("Natación")
-            if r['TPI_Ciclismo'] < 80: faltantes.append("Ciclismo")
-            if r['TPI_Trote'] < 80: faltantes.append("Trote")
-            return f"Bajo cumplimiento en: {', '.join(faltantes)}"
+        if r['TPI_Global'] == 0: return "⚠️ Sin actividad registrada"
+        if r['TPI_Global'] < 85: return "Bajo volumen o sesiones faltantes"
         return "✅ Cumplimiento óptimo"
-    
     df['Nota_Coach'] = df.apply(generar_nota, axis=1)
-    
-    # 6. RESTAURAR COLUMNAS PARA COMPATIBILIDAD CON WORD/EXCEL
-    df['CV'] = 0 # Valor temporal para evitar KeyErrors en el Word
+
+    # 5. RESTAURACIÓN DE MÉTRICAS PARA SECCIÓN 5 (REPORTE WORD)
+    # Calculamos el CV (Coeficiente de Variación) para identificar triatletas completos
+    def calcular_cv_legacy(r):
+        valores = [r['N_Mins'], r['B_Mins'], r['R_Mins']]
+        if sum(valores) == 0: return 'NC'
+        # Si tiene las 3 disciplinas, calculamos el CV numérico
+        if all(v > 0 for v in valores):
+            return round(np.std(valores) / np.mean(valores), 4)
+        return 'NC' # No es triatleta completo esta semana
+
+    df['CV'] = df.apply(calcular_cv_legacy, axis=1)
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
-    df['Indice_Balance'] = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].std(axis=1).fillna(0)
 
     return df
+    
 # *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
