@@ -301,6 +301,7 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
 # *****************************************************************************
 
 def time_to_mins_robust(value):
+    """Convierte formatos HH:MM:SS a minutos decimales para cálculos."""
     if pd.isna(value) or value == 0: return 0.0
     if isinstance(value, (int, float)): return float(value)
     try:
@@ -315,77 +316,57 @@ def time_to_mins_robust(value):
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
     df = df_reales.copy()
     
-    # 1. SINCRONIZACIÓN DE COLUMNAS (Mapeo de tu Excel Sem 08 a Motor Interno)
-    mapeo_columnas = {
-        'Natación': 'N_Mins',
-        'Bicicleta': 'B_Mins',
-        'Trote': 'R_Mins',
-        'Actividades': 'Total_Ses'
-    }
-    df.rename(columns=mapeo_columnas, inplace=True)
+    # 1. SINCRONIZACIÓN DE NOMBRES DE COLUMNAS (Mapeo de tu Excel Sem 08)
+    # Traducimos los nombres de tus columnas al lenguaje interno del motor
+    mapeo = {'Natación': 'N_Mins', 'Bicicleta': 'B_Mins', 'Trote': 'R_Mins'}
+    df.rename(columns=mapeo, inplace=True)
+    
+    # Asegurar que la columna de identidad sea 'Deportista'
+    for c in ['Nombre', 'Atleta', 'Athlete']:
+        if c in df.columns: df.rename(columns={c: 'Deportista'}, inplace=True)
 
-    # 2. CONVERSIÓN DE TIEMPOS
+    # 2. CONVERSIÓN DE TIEMPOS A NÚMEROS (Evita error en gráfico de torta)
     for col in ['N_Mins', 'B_Mins', 'R_Mins']:
         if col in df.columns:
             df[col] = df[col].apply(time_to_mins_robust)
         else:
             df[col] = 0.0
 
-    # 3. ESTIMACIÓN DE SESIONES (Si no vienen desglosadas)
-    # Si tu excel tiene 'Total_Ses', las repartimos proporcionalmente o usamos 1 como base
-    for s_col in ['N_Ses', 'B_Ses', 'R_Ses']:
-        ref_m = s_col.replace('_Ses', '_Mins')
-        df[s_col] = df[ref_m].apply(lambda x: 1 if x > 0 else 0)
-
-    # 4. CÁLCULO DE ADHERENCIA (TPI 40/60)
-    mapping = {'Natacion': 'N_Mins', 'Ciclismo': 'B_Mins', 'Trote': 'R_Mins'}
-    for d, real_c in mapping.items():
-        h_plan, s_plan = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
-        def extraer_plan(atl, c_n, v_g):
-            if df_plan_indiv is not None and atl in df_plan_indiv['Deportista'].values:
-                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atl, c_n].values[0]
-                return val if val > 0 else np.nan
-            return v_g if v_g > 0 else np.nan
+    # 3. LÓGICA DE CASCADA: Plan Individual > Plan Global
+    disciplinas = {'Natacion': 'N_Mins', 'Ciclismo': 'B_Mins', 'Trote': 'R_Mins'}
+    for d, real_c in disciplinas.items():
+        h_plan_col = f"{d}_Hrs_Plan"
+        s_plan_col = f"{d}_Ses_Plan"
         
-        df[h_plan] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
-        df[s_plan] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
+        def obtener_meta(atleta, meta_col, valor_global):
+            # Si hay plan individual y el atleta existe en él
+            if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
+                if atleta in df_plan_indiv['Deportista'].values:
+                    val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, meta_col].values[0]
+                    return val if (pd.notna(val) and val > 0) else valor_global
+            # Si no, aplicar Plan Global (el que ingresas en el sidebar)
+            return valor_global
 
-        # VCI (Volumen) y SEI (Sesiones)
-        df[f'VCI_{d}'] = df.apply(lambda r: (r[real_c] / (r[h_plan] * 60)) * 100 if r[h_plan] > 0 else 0, axis=1)
-        s_real_c = real_c.replace('_Mins', '_Ses')
-        df[f'SEI_{d}'] = df.apply(lambda r: (r[s_real_c] / r[s_plan]) * 100 if r[s_plan] > 0 else 0, axis=1)
-        
+        df[h_plan_col] = df.apply(lambda r: obtener_meta(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
+        df[s_plan_col] = df.apply(lambda r: obtener_meta(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
+
+        # 4. CÁLCULOS TPI (40% Volumen / 60% Sesiones)
+        df[f'VCI_{d}'] = df.apply(lambda r: (r[real_c] / (r[h_plan_col] * 60)) * 100 if r[h_plan_col] > 0 else 0, axis=1)
+        # Sesiones: 1 si registró tiempo
+        s_real = real_c.replace('_Mins', '_Ses')
+        df[s_real] = df[real_c].apply(lambda x: 1 if x > 0 else 0)
+        df[f'SEI_{d}'] = df.apply(lambda r: (r[s_real] / r[s_plan_col]) * 100 if r[s_plan_col] > 0 else 0, axis=1)
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
-        
-        # Clasificación individual
-        def clasificar(v):
-            if v <= 0: return "Riesgo"
-            if v >= 95: return "Óptimo"
-            if v >= 85: return "Parcial"
-            return "Riesgo"
-        df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar)
 
-    # 5. RESULTADOS GLOBALES
+    # 5. INTEGRIDAD PARA REPORTE WORD (Sección 5)
     hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
     df['TPI_Global'] = df.apply(lambda r: (r['T_Mins'] / (hrs_p_tot.loc[r.name]*60)) * 100 if hrs_p_tot.loc[r.name] > 0 else 0, axis=1)
     
-    def clasificar_global(v):
-        if v <= 0: return "Riesgo"
-        if v >= 95: return "Óptimo"
-        if v >= 85: return "Parcial"
-        return "Riesgo"
-    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_global)
-    
-    # 6. NOTA DEL COACH
-    def generar_nota(r):
-        if r['TPI_Global'] == 0: return "⚠️ Sin actividad"
-        if r['TPI_Global'] < 85: return "Baja carga o faltan sesiones"
-        return "✅ Buen trabajo"
-    df['Nota_Coach'] = df.apply(generar_nota, axis=1)
-
-    # COMPATIBILIDAD CON REPORTE GOLD (SECCIÓN 5)
+    # Clasificación y CV (Legacy para el Word)
+    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else ("Parcial" if v >= 85 else "Riesgo"))
     df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
+    df['Nota_Coach'] = df.apply(lambda r: "⚠️ Sin actividad" if r['TPI_Global'] == 0 else "✅ Procesado", axis=1)
 
     return df
     
