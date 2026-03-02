@@ -300,48 +300,38 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
 # --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
 # *****************************************************************************
 
-def asegurar_minutos_reales(valor):
+def asegurar_aritmetica_funcional(valor):
     """
-    REGLA DE INGENIERÍA:
-    - Si es número (minutos ya calculados), se mantiene.
-    - Si es texto o tiempo, se transforma.
+    PRUEBA BÁSICA DE INGENIERÍA:
+    1. Si es número (int/float), se mantiene (ya es minutos).
+    2. Si es texto o tiempo, usa to_mins para convertirlo.
     """
     if pd.isna(valor) or valor == 0: return 0.0
-    if isinstance(valor, (int, float)): 
-        # Si el número es < 1, es fracción de día de Excel. Si es > 1, son minutos.
-        return float(valor * 1440) if valor < 1.0 else float(valor)
+    # 🛡️ REGLA: Si ya es un número funcional, no aplicar transformación.
+    if isinstance(valor, (int, float)): return float(valor)
+    # Si es texto (HH:MM:SS), usamos tu función de la Sección 2
     return to_mins(valor)
 
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
     df = df_reales.copy()
     
-    # 1. LIMPIEZA AGRESIVA DE COLUMNAS (Evita fallos por espacios o tildes)
+    # 1. LIMPIEZA DE COLUMNAS (Evita KeyErrors por espacios o tildes)
     df.columns = [clean_string(c) for c in df.columns]
     
-    # 2. MAPEO DE IDENTIDAD (Sincronización con nombres normalizados)
-    # Aquí buscamos el concepto, no solo el nombre exacto.
-    mapeo_identidad = {
-        'NATACION': 'N_Mins', 
-        'BICICLETA': 'B_Mins', 
-        'CICLISMO': 'B_Mins',
-        'TROTE': 'R_Mins',
-        'RUNNING': 'R_Mins'
-    }
-    df.rename(columns=mapeo_identidad, inplace=True)
-    
-    # Identificar al deportista
+    # 2. SINCRONIZACIÓN DE IDENTIDAD
+    # Mapeamos los conceptos del Excel a las variables del motor
+    mapeo = {'NATACION': 'N_Mins', 'BICICLETA': 'B_Mins', 'CICLISMO': 'B_Mins', 'TROTE': 'R_Mins'}
+    df.rename(columns=mapeo, inplace=True)
     for c in df.columns:
-        if c in ['NOMBRE', 'ATLETA', 'DEPORTISTA']:
-            df.rename(columns={c: 'Deportista'}, inplace=True)
+        if c in ['NOMBRE', 'ATLETA', 'DEPORTISTA']: df.rename(columns={c: 'Deportista'}, inplace=True)
 
     # 3. PROCESAMIENTO ARITMÉTICO (Tu prueba básica)
     for col in ['N_Mins', 'B_Mins', 'R_Mins']:
         if col in df.columns:
-            df[col] = df[col].apply(asegurar_minutos_reales)
+            df[col] = df[col].apply(asegurar_aritmetica_funcional)
         else:
             df[col] = 0.0
     
-    # Dato vital para que el gráfico de la Sección 5 NO sea cero
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
 
     # 4. LÓGICA DE CASCADA (REGLA: Individual > Global)
@@ -360,23 +350,23 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         df[h_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
         df[s_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
 
-        # KPIs Adherencia
+        # KPIs TPI (40/60)
         df[f'VCI_{d}'] = (df[col_real] / (df[h_plan] * 60)) * 100
         df[f'SEI_{d}'] = (df[col_real].apply(lambda x: 1 if x > 0 else 0) / df[s_plan]) * 100
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}'].fillna(0)) + (0.6 * df[f'SEI_{d}'].fillna(0))
 
-    # 5. RESULTADOS PARA REPORTES (Sección 5 y 7)
-    hrs_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['TPI_Global'] = (df['T_Mins'] / (hrs_tot * 60)) * 100
+    # 5. GARANTÍA DE COLUMNAS PARA LA INTERFAZ (Evita el KeyError)
+    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
+    df['TPI_Global'] = (df['T_Mins'] / (hrs_p_tot * 60)) * 100
+    df['TPI_Global'] = df['TPI_Global'].fillna(0)
+    
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else "Riesgo")
+    df['Nota_Coach'] = df.apply(lambda r: "✅ Datos Procesados" if r['T_Mins'] > 0 else "⚠️ Sin actividad", axis=1)
+    
+    # Suministro para reporte Word
     df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
-    
-    # Restaurar nombres para visualización
     df['Tiempo Total'] = df['T_Mins'].apply(to_hhmmss_display)
-    df['Natación'] = df['N_Mins'].apply(to_hhmmss_display)
-    df['Bicicleta'] = df['B_Mins'].apply(to_hhmmss_display)
-    df['Trote'] = df['R_Mins'].apply(to_hhmmss_display)
-    
+
     return df
     
 # *****************************************************************************
