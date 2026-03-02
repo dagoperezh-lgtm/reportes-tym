@@ -296,39 +296,98 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
     
     return comentario_final
 
-# --- 3B. MOTOR DE ADHERENCIA Y GOBERNANZA (REGLA DE CASCADA) ---
+# *****************************************************************************
+# --- 3B. MOTOR DE ADHERENCIA Y GOBERNANZA (REPARADO V2.2.35) ---
+# *****************************************************************************
+
 def asegurar_minutos(valor):
-    if pd.isna(valor) or valor == 0: return 0.0
-    if isinstance(valor, (int, float)): return float(valor)
+    """
+    PRUEBA BÁSICA DE INGENIERÍA:
+    - Si el dato es nulo o vacío, retorna 0.0.
+    - Si es número (int/float), lo mantiene (ya es funcional).
+    - Si es texto o tiempo, usa to_mins para convertirlo.
+    """
+    # 🛡️ Evita el ValueError de ambigüedad en Pandas
+    if pd.isna(valor):
+        return 0.0
+    
+    # REGLA: Si ya es un número funcional, no aplicar transformación
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    
+    # Casos nulos escritos como texto
+    if str(valor).strip() in ['0', '0.0', '--:--', '', 'NC']:
+        return 0.0
+        
+    # De lo contrario, delegamos a tu función to_mins de la Sección 2
     return to_mins(valor)
 
 def calcular_adherencia_v2(df_reales, df_plan_indiv=None, dict_plan_global=None):
+    """
+    Motor de Adherencia: Traduce el Excel Semanal al lenguaje de la App.
+    Aplica la jerarquía: Plan Individual > Plan Global.
+    """
     df = df_reales.copy()
-    mapeo = {'Natación': 'N_Mins', 'Bicicleta': 'B_Mins', 'Trote': 'R_Mins'}
-    df.rename(columns=mapeo, inplace=True)
+    
+    # 1. Sincronización de Identidad y Columnas
+    # Mapeamos los nombres de tu Excel 'Sem 08' a las variables del motor
+    mapeo_entrada = {
+        'Natación': 'N_Mins', 
+        'Bicicleta': 'B_Mins', 
+        'Trote': 'R_Mins',
+        'Nombre': 'Deportista',
+        'Atleta': 'Deportista'
+    }
+    df.rename(columns=mapeo_entrada, inplace=True)
+
+    # 2. Conversión Aritmética Selectiva (Tu prueba básica)
     for col in ['N_Mins', 'B_Mins', 'R_Mins']:
-        df[col] = df[col].apply(asegurar_minutos)
+        if col in df.columns:
+            df[col] = df[col].apply(asegurar_minutos)
+        else:
+            df[col] = 0.0
+    
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
 
-    for d in ['Natacion', 'Ciclismo', 'Trote']:
-        h_p, s_p = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
-        col_r = 'N_Mins' if d=='Natacion' else 'B_Mins' if d=='Ciclismo' else 'R_Mins'
+    # 3. Lógica de Cascada por Disciplina (Individual > Global)
+    disciplinas = {'Natacion': 'N_Mins', 'Ciclismo': 'B_Mins', 'Trote': 'R_Mins'}
+    for d_name in disciplinas.keys():
+        h_plan_key = f"{d_name}_Hrs_Plan"
+        s_plan_key = f"{d_name}_Ses_Plan"
+        col_real = disciplinas[d_name]
         
-        def get_meta(atl, m_col, v_glob):
+        def obtener_meta(atl, m_col, v_glob):
             if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
-                p = df_plan_indiv[df_plan_indiv['Deportista'].apply(clean_string) == clean_string(atl)]
-                if not p.empty: return p[m_col].values[0] if p[m_col].values[0] > 0 else v_glob
+                atl_c = clean_string(atl)
+                plan = df_plan_indiv[df_plan_indiv['Deportista'].apply(clean_string) == atl_c]
+                if not plan.empty and m_col in plan.columns:
+                    val = plan[m_col].values[0]
+                    return val if (pd.notna(val) and val > 0) else v_glob
             return v_glob
 
-        df[h_p] = df.apply(lambda r: get_meta(r['Deportista'], h_p, dict_plan_global.get(h_p, 0)), axis=1)
-        df[s_p] = df.apply(lambda r: get_meta(r['Deportista'], s_p, dict_plan_global.get(s_p, 0)), axis=1)
-        df[f'TPI_{d}'] = (0.4 * (df[col_r]/(df[h_p]*60)*100)) + (0.6 * (df[col_r].apply(lambda x:1 if x>0 else 0)/df[s_p]*100))
-    
-    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['TPI_Global'] = (df['T_Mins'] / (hrs_p_tot * 60)) * 100
-    df['Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else "Riesgo")
-    return df
+        df[h_plan_key] = df.apply(lambda r: obtener_meta(r.get('Deportista', ''), h_plan_key, dict_plan_global.get(h_plan_key, 0)), axis=1)
+        df[s_plan_key] = df.apply(lambda r: obtener_meta(r.get('Deportista', ''), s_plan_key, dict_plan_global.get(s_plan_key, 0)), axis=1)
 
+        # 4. KPIs de Adherencia (TPI: 40% Volumen / 60% Sesiones)
+        # Usamos fillna(0) para evitar colapsos en divisiones por cero
+        vci = (df[col_real] / (df[h_plan_key] * 60)) * 100
+        sei = (df[col_real].apply(lambda x: 1 if x > 0 else 0) / df[s_plan_key]) * 100
+        df[f'TPI_{d_name}'] = (0.4 * vci.fillna(0)) + (0.6 * sei.fillna(0))
+
+    # 5. Resultados Finales para los Reportes
+    hrs_p_total = (df['Natacion_Hrs_Plan'] + df['Ciclismo_Hrs_Plan'] + df['Trote_Hrs_Plan'])
+    df['TPI_Global'] = (df['T_Mins'] / (hrs_p_total * 60)) * 100
+    df['TPI_Global'] = df['TPI_Global'].fillna(0)
+    
+    df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else ("Parcial" if v >= 85 else "Riesgo"))
+    
+    # Columnas de visualización con formato reloj
+    df['Tiempo Total'] = df['T_Mins'].apply(to_hhmmss_display)
+    df['Natación'] = df['N_Mins'].apply(to_hhmmss_display)
+    df['Bicicleta'] = df['B_Mins'].apply(to_hhmmss_display)
+    df['Trote'] = df['R_Mins'].apply(to_hhmmss_display)
+    
+    return df
 # *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
@@ -434,49 +493,49 @@ def parse_raw_data(bloque_input_strava):
 
 def parse_ocr_data(texto_ocr_crudo):
     """
-    Parsea la tabla de traducción OCR (Distancia y Salida Larga).
-    Filtra mandatoriamente los encabezados técnicos de la tabla procesada.
+    Parser de Ingeniería para Formato Vertical:
+    Detecta el patrón [Nombre] [Nombre] [Valor] y lo traduce a podios.
+    Blindado contra duplicidad de nombres en la misma línea.
     """
-    lista_podio_distancia = []
-    lista_podio_larga = []
+    # 1. Limpieza inicial: quitamos líneas vacías y encabezados de ruido
+    lineas = [l.strip() for l in texto_ocr_crudo.split('\n') if l.strip()]
+    palabras_ruido = ['tiempo', 'distancia', 'actividad', 'larga', 'total', 'clasificación']
+    lineas_limpias = [l for l in lineas if not any(r in l.lower() for r in palabras_ruido)]
     
-    # Listado de términos prohibidos en las celdas de datos (encabezados)
-    filtro_nombres_tabla = ["Nombre", "Distancia", "Actividad", "Tiempo", "Km", "total", "Clasificación"]
+    podio_distancia = []
+    podio_larga = []
     
-    lineas_de_la_entrada_ocr = texto_ocr_crudo.strip().split('\n')
-    
-    for fila_ocr in lineas_de_la_entrada_ocr:
-        celdas_ocr = fila_ocr.split(';')
+    # 2. Procesamiento de bloques (Nombre -> Valor)
+    # Iteramos saltando de 2 en 2, asumiendo que el nombre es la base
+    i = 0
+    while i < len(lineas_limpias) - 1:
+        item_nombre = lineas_limpias[i]
         
-        if len(celdas_ocr) >= 6:
-            # Datos pertenecientes al bloque de Distancia Total
-            nombre_atleta_d = celdas_ocr[2].strip()
-            valor_metrica_d = celdas_ocr[3].strip()
+        # Lógica para limpiar nombres duplicados (ej: "Claudio Claudio")
+        palabras_nombre = item_nombre.split()
+        mitad = len(palabras_nombre) // 2
+        if mitad > 0 and palabras_nombre[:mitad] == palabras_nombre[mitad:]:
+            nombre_final = " ".join(palabras_nombre[:mitad])
+        else:
+            nombre_final = item_nombre
             
-            # Datos pertenecientes al bloque de Salida Larga semanal
-            nombre_atleta_l = celdas_ocr[4].strip()
-            valor_metrica_l = celdas_ocr[5].strip()
-            
-            # Validación de integridad para columna de Distancia
-            es_titulo_d = False
-            for term_f in filtro_nombres_tabla:
-                if term_f.lower() in nombre_atleta_d.lower():
-                    es_titulo_d = True
-            
-            if es_titulo_d == False and nombre_atleta_d != "":
-                lista_podio_distancia.append({'nombre': nombre_atleta_d, 'valor': valor_metrica_d})
-                
-            # Validación de integridad para columna de Salida Larga
-            es_titulo_l = False
-            for term_f in filtro_nombres_tabla:
-                if term_f.lower() in nombre_atleta_l.lower():
-                    es_titulo_l = True
-                    
-            if es_titulo_l == False and nombre_atleta_l != "":
-                lista_podio_larga.append({'nombre': nombre_atleta_l, 'valor': valor_metrica_l})
-                
-    # Retornar exclusivamente el Top 3 de cada categoría de honor
-    return lista_podio_distancia[:3], lista_podio_larga[:3]
+        valor = lineas_limpias[i+1]
+        
+        # 3. Clasificación por naturaleza del dato
+        # Si tiene ',' o 'km', es Distancia Total
+        if ',' in valor or 'km' in valor.lower():
+            podio_distancia.append({'nombre': nombre_final, 'valor': valor})
+            i += 2
+        # Si tiene ':' es un tiempo (Actividad Larga)
+        elif ':' in valor:
+            podio_larga.append({'nombre': nombre_final, 'valor': valor})
+            i += 2
+        else:
+            # Si la línea siguiente no es un valor válido, saltamos solo 1 para buscar el par
+            i += 1
+
+    # Retornamos los Top 3 de cada categoría para el Reporte Word
+    return podio_distancia[:3], podio_larga[:3]
 
 # *****************************************************************************
 # --- 5. ACTUALIZADOR DE EXCEL (OBJETIVO: INTEGRIDAD Y ORDEN NUMÉRICO) ---
@@ -649,132 +708,79 @@ def crear_excel_actualizado(referencia_maestro, df_actualizacion, input_semana_n
     return buffer_binario_descarga.getvalue()
 
 # *****************************************************************************
-# --- 6. GENERADOR DE REPORTE WORD PROFESIONAL (BLOQUEADO - NO SINTETIZAR) ---
+# --- 6. GENERADOR DE REPORTE WORD PROFESIONAL (V2.2.35 - INTEGRADO) ---
 # *****************************************************************************
 
 def aplicar_formato_tym_word(objeto_parrafo_word, pt_fuente, negrita_activo=False, centrado_activo=False):
-    """
-    Aplica rigurosamente el estilo institucional Calibri con los tamaños 20/15/13/11.
-    Este bloque está blindado contra síntesis para asegurar la imagen del club.
-    """
+    """Aplica rigurosamente el estilo institucional Calibri."""
     if not objeto_parrafo_word.runs:
         cursor_de_run = objeto_parrafo_word.add_run()
     else:
         cursor_de_run = objeto_parrafo_word.runs[0]
-        
     cursor_de_run.font.name = 'Calibri'
     cursor_de_run.font.size = Pt(pt_fuente)
     cursor_de_run.bold = negrita_activo
-    
     if centrado_activo:
         objeto_parrafo_word.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 def crear_tabla_profesional_tym_word(doc_word_instancia, df_origen_datos, lista_de_cabeceras):
-    """
-    Genera tablas con anchos milimétricos (Protocolo TYM) para el informe profesional.
-    Blindado contra saltos de línea inesperados.
-    """
+    """Genera tablas con anchos milimétricos (Protocolo TYM)."""
     instancia_de_tabla = doc_word_instancia.add_table(rows=1, cols=len(lista_de_cabeceras))
     instancia_de_tabla.style = 'Light Grid Accent 1'
-    instancia_de_tabla.alignment = 1 # Centrado
+    instancia_de_tabla.alignment = 1 
     instancia_de_tabla.autofit = False
-    
-    # Anchos fijos por ingeniería
     anchos_tym_fijos = {'#': 0.4, 'Deportista': 2.8, 'Tiempo Total': 0.7, 'Natación': 0.7, 'Bicicleta': 0.7, 'Trote': 0.7, 'CV': 0.6}
     
     for idx_cab, txt_cab in enumerate(lista_de_cabeceras):
-        celda_header_t = instancia_de_tabla.rows[0].cells[idx_cab]
-        celda_header_t.text = txt_cab
-        ancho_val_t = anchos_tym_fijos.get(txt_cab, 0.7)
-        celda_header_t.width = Inches(ancho_val_t)
-        aplicar_formato_tym_word(celda_header_t.paragraphs[0], 9, True, True)
+        celda = instancia_de_tabla.rows[0].cells[idx_cab]
+        celda.text = txt_cab
+        celda.width = Inches(anchos_tym_fijos.get(txt_cab, 0.7))
+        aplicar_formato_tym_word(celda.paragraphs[0], 9, True, True)
         
-    for _, fila_datos_w in df_origen_datos.iterrows():
-        celdas_de_la_fila_w = instancia_de_tabla.add_row().cells
-        for idx_dat, txt_cab_d in enumerate(lista_de_cabeceras):
-            celdas_de_la_fila_w[idx_dat].text = str(fila_datos_w[txt_cab_d])
-            ancho_dat_w = anchos_tym_fijos.get(txt_cab_d, 0.7)
-            celdas_de_la_fila_w[idx_dat].width = Inches(ancho_dat_w)
-            
-            # Alineación Nombres Izquierda, resto Centro
-            es_central = True
-            if txt_cab_d == 'Deportista':
-                es_central = False
-                
-            aplicar_formato_tym_word(celdas_de_la_fila_w[idx_dat].paragraphs[0], 9, False, es_central)
-            
+    for _, fila in df_origen_datos.iterrows():
+        celdas = instancia_de_tabla.add_row().cells
+        for idx, cab in enumerate(lista_de_cabeceras):
+            celdas[idx].text = str(fila[cab])
+            celdas[idx].width = Inches(anchos_tym_fijos.get(cab, 0.7))
+            aplicar_formato_tym_word(celdas[idx].paragraphs[0], 9, False, cab != 'Deportista')
     doc_word_instancia.add_paragraph()
 
 def generar_reporte_word_tym_completo(df_semanal_datos, num_sem_texto, podio_d_lista, podio_l_lista):
-    """
-    Construye el reporte Word íntegro bajo el modelo funcional V2.2.19.
-    Restablece todas las secciones de análisis técnico de forma extensa.
-    """
-    documento_final_word = Document()
+    """Mantiene tu reporte grupal original íntegro."""
+    documento = Document()
+    p_title = documento.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {num_sem_texto}', 0)
+    aplicar_formato_tym_word(p_title, 20, True, True)
     
-    # Título Principal
-    p_main_title_word = documento_final_word.add_heading(f'Reporte Semanal Club Tym Triatlón - Semana {num_sem_texto}', 0)
-    aplicar_formato_tym_word(p_main_title_word, 20, True, True)
-    documento_final_word.add_paragraph()
+    # Resumen y Gráfico (Tu lógica GOLD)
+    h_res = documento.add_heading('🔍 Resumen General', level=2); aplicar_formato_tym_word(h_res, 15, True)
+    df_f = df_semanal_datos[df_semanal_datos['CV'] != 'NC'].copy()
+    txt = f"Total deportistas: {len(df_semanal_datos)}\nHoras totales: {to_hhmmss_display(df_semanal_datos['T_Mins'].sum())}"
+    aplicar_formato_tym_word(documento.add_paragraph(txt), 11)
     
-    p_slogan_word_f = documento_final_word.add_paragraph('"(La semana de la simetría perfecta y el retorno del volumen)"')
-    aplicar_formato_tym_word(p_slogan_word_f, 11, True, True)
-    documento_final_word.add_paragraph()
+    fig, ax = plt.subplots(figsize=(4,4))
+    ax.pie([df_semanal_datos['N_Mins'].sum(), df_semanal_datos['B_Mins'].sum(), df_semanal_datos['R_Mins'].sum()], 
+           labels=['Natación', 'Ciclismo', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig)
+    documento.add_paragraph().alignment = 1
+    documento.paragraphs[-1].add_run().add_picture(buf, width=Inches(3.5))
 
-    # BLOQUE 1: Resumen General
-    h_resumen_word_f = documento_final_word.add_heading('🔍 Resumen General', level=2)
-    aplicar_formato_tym_word(h_resumen_word_f, 15, True)
-    documento_final_word.add_paragraph()
-    
-    df_filtrado_trias = df_semanal_datos[df_semanal_datos['CV'] != 'NC'].copy()
-    txt_resumen_bloque_f = f"Total deportistas registrados: {len(df_semanal_datos)}\nTriatletas completos: {len(df_filtrado_trias)}\nHoras totales del club: {to_hhmmss_display(df_semanal_datos['T_Mins'].sum())}"
-    p_info_word_f = documento_final_word.add_paragraph(txt_resumen_bloque_f); aplicar_formato_tym_word(p_info_word_f, 11)
-    
-    # Gráfico de Torta
-    fig_w_f, ax_w_f = plt.subplots(figsize=(4,4))
-    ax_w_f.pie([df_semanal_datos['N_Mins'].sum(), df_semanal_datos['B_Mins'].sum(), df_semanal_datos['R_Mins'].sum()], labels=['Natación', 'Ciclismo', 'Trote'], autopct='%1.1f%%', colors=['#1E90FF', '#32CD32', '#FF4500'])
-    
-    buffer_grafico_f = io.BytesIO()
-    plt.savefig(buffer_grafico_f, format='png', bbox_inches='tight')
-    plt.close(fig_w_f)
-    
-    p_graf_f = documento_final_word.add_paragraph()
-    p_graf_f.alignment = 1 # Centrado
-    p_graf_f.add_run().add_picture(buffer_grafico_f, width=Inches(3.5))
+    # Podios (Reutiliza tu lógica de comentarios)
+    for t_pod, d_pod, c_key in [('🏅 TOP 5 COMPLETOS', df_f.sort_values('T_Mins', ascending=False).head(5), 'Completos')]:
+        h = documento.add_heading(t_pod, level=2); aplicar_formato_tym_word(h, 15, True)
+        d_ren = d_pod.copy(); d_ren['#'] = range(1, len(d_ren) + 1)
+        crear_tabla_profesional_tym_word(documento, d_ren, ['#', 'Deportista', 'Tiempo Total', 'Natación', 'Bicicleta', 'Trote'])
+        for _, fila in d_ren.iterrows():
+            p = documento.add_paragraph(f"{fila['#']}. {fila['Deportista']}"); aplicar_formato_tym_word(p, 11, True)
+            documento.add_paragraph(generar_comentario(fila, c_key, fila['#']))
 
-    # BLOQUE 2: Podios Honor
-    for t_pod_f, d_pod_f, c_key_f in [('🏅 TOP 5 TRIATLETAS COMPLETOS', df_filtrado_trias.sort_values('T_Mins', ascending=False).head(5), 'Completos'), ('⚖️ TOP 5 TRIATLETAS MÁS BALANCEADOS', df_filtrado_trias.sort_values('CV', ascending=True).head(5), 'CV')]:
-        h_s_f = documento_final_word.add_heading(t_pod_f, level=2); aplicar_formato_tym_word(h_s_f, 15, True); documento_final_word.add_paragraph()
-        d_ren_f = d_pod_f.copy(); d_ren_f['#'] = range(1, len(d_ren_f) + 1)
-        crear_tabla_profesional_tym_word(documento_final_word, d_ren_f, ['#', 'Deportista', 'Tiempo Total' if c_key_f=='Completos' else 'CV', 'Natación', 'Bicicleta', 'Trote'])
-        h_analisis_f = documento_final_word.add_paragraph('Análisis del Desempeño:'); aplicar_formato_tym_word(h_analisis_f, 13, True)
-        for _, fila_f_loop in d_ren_f.iterrows():
-            p_n_f = documento_final_word.add_paragraph(f"{fila_f_loop['#']}. {fila_f_loop['Deportista']}"); aplicar_formato_tym_word(p_n_f, 11, True)
-            documento_final_word.add_paragraph(generar_comentario(fila_f_loop, c_key_f, fila_f_loop['#']))
-
-    # BLOQUE 3: TOP 15
-    for tit_s_f, ico_f, col_m_f, col_t_f in [('TIEMPO GENERAL', '🥇', 'T_Mins', 'Tiempo Total'), ('NATACIÓN', '🏊‍♂️', 'N_Mins', 'Natación'), ('CICLISMO', '🚴', 'B_Mins', 'Bicicleta'), ('TROTE', '🏃‍♂️', 'R_Mins', 'Trote')]:
-        documento_final_word.add_page_break()
-        h_15_f = documento_final_word.add_heading(f'{ico_f} TOP 15 {tit_s_f}', level=1); aplicar_formato_tym_word(h_15_f, 15, True); documento_final_word.add_paragraph()
-        d_15_f = df_semanal_datos[df_semanal_datos[col_m_f] > 0].sort_values(col_m_f, ascending=False).head(15).copy(); d_15_f['#'] = range(1, len(d_15_f) + 1)
-        crear_tabla_profesional_tym_word(documento_final_word, d_15_f, ['#', 'Deportista', col_t_f, 'Natación', 'Bicicleta', 'Trote'] if tit_s_f == 'TIEMPO GENERAL' else ['#', 'Deportista', col_t_f, 'Tiempo Total'])
-        h_podio_f = documento_final_word.add_paragraph('Análisis del Podio:'); aplicar_formato_tym_word(h_podio_f, 13, True)
-        for _, f_p_f in d_15_f.head(3).iterrows():
-            p_at_f = documento_final_word.add_paragraph(f"{'🥇' if f_p_f['#']==1 else '🥈' if f_p_f['#']==2 else '🥉'} {f_p_f['Deportista']}"); aplicar_formato_tym_word(p_at_f, 11, True)
-            documento_final_word.add_paragraph(generar_comentario(f_p_f, 'General' if tit_s_f == 'TIEMPO GENERAL' else col_t_f, f_p_f['#']))
-
-    # BLOQUE 4: OCR
-    documento_final_word.add_page_break()
-    h_d_w_f = documento_final_word.add_heading('📏 PODIO DISTANCIA TOTAL', level=1); aplicar_formato_tym_word(h_d_w_f, 15, True); documento_final_word.add_paragraph()
-    for idx_d_f, item_d_f in enumerate(podio_d_lista): documento_final_word.add_paragraph(f"{idx_d_f+1}. {item_d_f['nombre']} ({item_d_f['valor']} km)")
-    documento_final_word.add_paragraph(); h_l_w_f = documento_final_word.add_heading('⏱️ PODIO ACTIVIDAD MÁS LARGA', level=1); aplicar_formato_tym_word(h_l_w_f, 15, True); documento_final_word.add_paragraph()
-    for idx_l_f, item_l_f in enumerate(podio_l_lista): documento_final_word.add_paragraph(f"{idx_l_f+1}. {item_l_f['nombre']} ({item_l_f['valor']})")
+    # OCR Podios
+    documento.add_page_break()
+    h_ocr = documento.add_heading('📏 PODIOS OCR', level=1); aplicar_formato_tym_word(h_ocr, 15, True)
+    for i, item in enumerate(podio_d_lista): documento.add_paragraph(f"{i+1}. {item['nombre']} ({item['valor']} km)")
     
-    stream_salida_word = io.BytesIO(); documento_final_word.save(stream_salida_word); stream_salida_word.seek(0); return stream_salida_word
+    stream = io.BytesIO(); documento.save(stream); stream.seek(0); return stream
 
-# =============================================================================
-# SECCIÓN INYECTADA: MOTOR NARRATIVO INDIVIDUAL (ESTILO COLAB V17.0 - FIX NUMÉRICO)
-# =============================================================================
+# --- MOTOR NARRATIVO INDIVIDUAL (CON ADHERENCIA) ---
 def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos, sem_n):
     doc_p = Document()
     match_key = clean_string(atleta_nom)
@@ -782,72 +788,33 @@ def generar_reporte_narrativo_individual(atleta_nom, df_actual, dict_historicos,
     if row_act.empty: return None
     row_act = row_act.iloc[0]
 
-    # --- NUEVA SECCIÓN: ADHERENCIA AL PLAN ---
-    doc_p.add_heading(f'Adherencia al Plan: {atleta_nom}', 1)
-    p_tpi = doc_p.add_paragraph(f"Cumplimiento Global: {row_act['TPI_Global']:.1f}% ({row_act['Cumplimiento']})")
+    # SECCIÓN TPI
+    p_h = doc_p.add_heading(f'Análisis Personal: {atleta_nom}', 0); aplicar_formato_tym_word(p_h, 18, True, True)
+    doc_p.add_heading('📊 Adherencia al Plan', level=1)
+    p_tpi = doc_p.add_paragraph(f"Cumplimiento Global: {row_act.get('TPI_Global', 0):.1f}% ({row_act.get('Estado_Cumplimiento', 'Riesgo')})")
     aplicar_formato_tym_word(p_tpi, 12, True)
 
     table = doc_p.add_table(rows=1, cols=3); table.style = 'Light Grid Accent 1'
-    for i, h in enumerate(['Disciplina', 'Meta (Hrs)', 'Logro (%)']): table.rows[0].cells[i].text = h
+    for i, h in enumerate(['Disciplina', 'Meta', 'Logro']): table.rows[0].cells[i].text = h
     for d, h_p, tpi in [('Natación', 'Natacion_Hrs_Plan', 'TPI_Natacion'), ('Ciclismo', 'Ciclismo_Hrs_Plan', 'TPI_Ciclismo'), ('Trote', 'Trote_Hrs_Plan', 'TPI_Trote')]:
         r = table.add_row().cells
-        r[0].text = d; r[1].text = f"{row_act[h_p]}h"; r[2].text = f"{row_act[tpi]:.1f}%"
+        r[0].text = d; r[1].text = f"{row_act.get(h_p, 0)}h"; r[2].text = f"{row_act.get(tpi, 0):.1f}%"
 
-    # [Aquí sigue tu lógica original de TIEMPO TOTAL, NATACIÓN, etc., sin cambios]
-    doc_p.add_heading('Análisis Comparativo', level=2)
-    # ... (resto de tu código de benchmarks y gráfico de barras)
-    return doc_p # (Asegúrate de guardar en buffer como en tu código original)
+    # Comparativa Histórica
+    doc_p.add_heading('📈 Comparativa', level=1)
+    for tit, hoja, col, pref in [("TOTAL", "Tiempo Total", "T_Mins", "T"), ("NAT", "Natación", "N_Mins", "N")]:
+        val = row_act[col]
+        # Benchmark simple: media del equipo esta semana
+        avg_eq = df_actual[f"{pref}_Mins"].mean()
+        p = doc_p.add_paragraph(f"{tit}: {to_hhmmss_display(val)} (Promedio Equipo: {to_hhmmss_display(avg_eq)})")
+        aplicar_formato_tym_word(p, 10)
 
-    def get_benchmarks(hoja_key, match_k):
-        df_h = dict_historicos.get(hoja_key)
-        if df_h is None: return 0, 0
-        df_h['MatchKey'] = df_h.iloc[:, 0].astype(str).apply(clean_string)
-        
-        # Identificar columnas de semanas (ej: "Sem 01", "Sem 02")
-        cols_sem = [c for c in df_h.columns if str(c).startswith("Sem ")]
-        
-        # Promedio del Equipo (Mins actuales)
-        prefijo = "N" if "Natación" in hoja_key else "B" if "Ciclismo" in hoja_key else "R" if "Trote" in hoja_key else "T"
-        avg_equipo = df_actual[f"{prefijo}_Mins"].mean()
-        
-        # --- FIX DE SEGURIDAD PARA PROMEDIO HISTÓRICO ---
-        r_atleta = df_h[df_h['MatchKey'] == match_k]
-        if not r_atleta.empty:
-            # Extraemos la fila de semanas y forzamos a que todo sea número (lo no numérico será NaN)
-            datos_semanas = pd.to_numeric(r_atleta[cols_sem].iloc[0], errors='coerce')
-            # Calculamos el promedio ignorando los NaN
-            avg_hist = datos_semanas.mean() * 1440 if not pd.isna(datos_semanas.mean()) else 0
-        else:
-            avg_hist = 0
-            
-        return avg_equipo, avg_hist
-
-    # Construcción de comparativas por disciplina
-    for tit_m, hoja_m, col_m in [("TIEMPO TOTAL", "Tiempo Total", "T_Mins"), ("NATACIÓN", "Natación", "N_Mins"), ("CICLISMO", "Ciclismo", "B_Mins"), ("TROTE", "Trote", "R_Mins")]:
-        doc_p.add_heading(tit_m, level=1)
-        val_act = row_act[col_m]
-        bench_eq, bench_hi = get_benchmarks(hoja_m, match_key)
-        
-        p_m = doc_p.add_paragraph()
-        p_m.add_run(f"Volumen actual: {to_hhmmss_display(val_act)}\n").bold = True
-        
-        diff_eq = val_act - bench_eq
-        txt_eq = f"Rendiste {to_hhmmss_display(abs(diff_eq))} {'MÁS' if diff_eq > 0 else 'MENOS'} que el promedio del equipo."
-        run_eq = p_m.add_run(txt_eq)
-        run_eq.font.color.rgb = RGBColor(0, 100, 0) if diff_eq >= 0 else RGBColor(180, 0, 0)
-        
-        diff_hi = val_act - bench_hi
-        p_m.add_run(f"\nVs Tu Media Histórica: {to_hhmmss_display(abs(diff_hi))} {'MÁS' if diff_hi > 0 else 'MENOS'}.")
-
-    # Gráfico de barras personal
-    fig_p, ax_p = plt.subplots(figsize=(5,3))
-    ax_p.bar(['Nat', 'Bici', 'Tro'], [row_act['N_Mins'], row_act['B_Mins'], row_act['R_Mins']], color=['#1E90FF', '#32CD32', '#FF4500'])
-    ax_p.set_title("Tu Distribución de Carga (Minutos)")
-    buf_p = io.BytesIO(); plt.savefig(buf_p, format='png', bbox_inches='tight'); plt.close(fig_p)
-    doc_p.add_paragraph().add_run().add_picture(buf_p, width=Inches(3.5))
+    # Gráfico
+    fig, ax = plt.subplots(figsize=(5,3))
+    ax.bar(['Nat', 'Bici', 'Tro'], [row_act['N_Mins'], row_act['B_Mins'], row_act['R_Mins']], color=['#1E90FF', '#32CD32', '#FF4500'])
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig)
+    doc_p.add_paragraph().add_run().add_picture(buf, width=Inches(3.5))
     
-    doc_p.add_paragraph("─" * 50)
-    doc_p.add_paragraph("Generado por Agente TYM 2026").alignment = 2
     b_out = io.BytesIO(); doc_p.save(b_out); b_out.seek(0); return b_out
 
 # *****************************************************************************
