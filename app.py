@@ -300,86 +300,84 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
 # --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
 # *****************************************************************************
 
+def time_to_mins_robust(value):
+    """Convierte formatos HH:MM:SS o texto a minutos totales."""
+    if pd.isna(value) or value == 0: return 0.0
+    if isinstance(value, (int, float)): return float(value)
+    try:
+        str_val = str(value).strip()
+        if ':' in str_val:
+            parts = str_val.split(':')
+            if len(parts) == 3: # HH:MM:SS
+                return int(parts[0])*60 + int(parts[1]) + int(parts[2])/60
+            if len(parts) == 2: # MM:SS
+                return int(parts[0]) + int(parts[1])/60
+        return float(str_val)
+    except:
+        return 0.0
+
 def clasificar_cumplimiento(valor):
-    """Escala interpretativa para el Training Performance Index (TPI)."""
     if pd.isna(valor) or valor <= 0: return "Riesgo"
-    if valor > 105:   return "Sobrecarga"
-    if valor >= 95:  return "Óptimo"
-    if valor >= 85:  return "Parcial"
+    if valor > 105: return "Sobrecarga"
+    if valor >= 95: return "Óptimo"
+    if valor >= 85: return "Parcial"
     return "Riesgo"
 
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
-    """
-    Sistema de métricas de cumplimiento TYM. 
-    Asegura limpieza de datos para evitar errores en gráficos de Sección 5.
-    """
     df = df_reales.copy()
     
-    # 1. BLINDAJE DE IDENTIDAD: Sincronizar columna de nombres
-    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete', 'NOMBRE', 'DEPORTISTA']
-    col_identidad = next((c for c in df.columns if c in posibles_nombres), df.columns[0])
-    df.rename(columns={col_identidad: 'Deportista'}, inplace=True)
+    # Sincronización de Identidad
+    posibles = ['Deportista', 'Nombre', 'Atleta']
+    col_id = next((c for c in df.columns if c in posibles), df.columns[0])
+    df.rename(columns={col_id: 'Deportista'}, inplace=True)
 
-    mapping = {
-        'Natacion': {'real_h': 'N_Mins', 'real_s': 'N_Ses'},
-        'Ciclismo': {'real_h': 'B_Mins', 'real_s': 'B_Ses'},
-        'Trote':    {'real_h': 'R_Mins', 'real_s': 'R_Ses'}
-    }
+    # MAPEO DE COLUMNAS DEL EXCEL SEMANAL (Basado en tu archivo Sem 08)
+    # Convertimos los nombres de tu Excel a los que usa el sistema interno
+    df.rename(columns={'Natación': 'N_Mins', 'Bicicleta': 'B_Mins', 'Trote': 'R_Mins'}, inplace=True)
 
-    # Asegurar existencia de columnas base y LIMPIEZA TOTAL de NaN
-    columnas_clave = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses', 'T_Mins']
-    for col in columnas_clave:
-        if col not in df.columns: 
-            df[col] = 0
-    
-    # Reemplazar NaN por 0 para evitar fallos en Matplotlib (Gráficos)
-    df[columnas_clave] = df[columnas_clave].fillna(0)
+    # Conversión robusta de tiempos a minutos
+    for col in ['N_Mins', 'B_Mins', 'R_Mins']:
+        if col in df.columns:
+            df[col] = df[col].apply(time_to_mins_robust)
+        else:
+            df[col] = 0.0
 
-    # 2. INTEGRACIÓN DE PLANES (Prioridad: Individual > Global)
-    for disc in mapping.keys():
-        h_plan_col, s_plan_col = f"{disc}_Hrs_Plan", f"{disc}_Ses_Plan"
-        def extraer_plan(atleta, col_name, val_global):
+    # Asegurar Sesiones (si no vienen en el Excel, el motor las estima)
+    for s_col in ['N_Ses', 'B_Ses', 'R_Ses']:
+        if s_col not in df.columns:
+            # Estimación: si tiene minutos, al menos hizo 1 sesión
+            ref_min = s_col.replace('_Ses', '_Mins')
+            df[s_col] = df[ref_min].apply(lambda x: 1 if x > 0 else 0)
+
+    # Integración de Planes y Cálculos TPI
+    mapping = {'Natacion': 'N_Mins', 'Ciclismo': 'B_Mins', 'Trote': 'R_Mins'}
+    for d, real_col in mapping.items():
+        h_plan, s_plan = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
+        def extraer_plan(atleta, c_name, v_glob):
             if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
-                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
+                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, c_name].values[0]
                 return val if val > 0 else np.nan
-            return val_global if val_global > 0 else np.nan
-        df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
-        df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
+            return v_glob if v_glob > 0 else np.nan
+        
+        df[h_plan] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
+        df[s_plan] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
 
-    # 3. CÁLCULOS TPI (Adherencia 40/60)
-    for d, cols in mapping.items():
-        df[f'VCI_{d}'] = df.apply(lambda r: (r[cols['real_h']] / (r[f'{d}_Hrs_Plan'] * 60)) * 100 if r[f'{d}_Hrs_Plan'] > 0 else 0, axis=1)
-        df[f'SEI_{d}'] = df.apply(lambda r: (r[cols['real_s']] / r[f'{d}_Ses_Plan']) * 100 if r[f'{d}_Ses_Plan'] > 0 else 0, axis=1)
+        # Cálculo TPI 40/60
+        df[f'VCI_{d}'] = df.apply(lambda r: (r[real_col] / (r[h_plan] * 60)) * 100 if r[h_plan] > 0 else 0, axis=1)
+        # Usamos la columna de sesiones que creamos arriba
+        s_real_col = real_col.replace('_Mins', '_Ses')
+        df[f'SEI_{d}'] = df.apply(lambda r: (r[s_real_col] / r[s_plan]) * 100 if r[s_plan] > 0 else 0, axis=1)
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
         df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
 
-    # 4. CÁLCULOS GLOBALES Y NOTA EXPLICATIVA
+    # Globales y Nota Coach
     hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['TPI_Global'] = (df['N_Mins'] + df['B_Mins'] + df['R_Mins']) / (hrs_p_tot * 60) * 100
-    df['TPI_Global'] = df['TPI_Global'].replace([np.inf, -np.inf], 0).fillna(0)
+    df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
+    df['TPI_Global'] = df.apply(lambda r: (r['T_Mins'] / (hrs_p_tot.loc[r.name]*60)) * 100 if hrs_p_tot.loc[r.name] > 0 else 0, axis=1)
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
     
-    def generar_nota(r):
-        if r['TPI_Global'] == 0: return "⚠️ Sin actividad registrada"
-        if r['TPI_Global'] < 85: return "Bajo volumen o sesiones faltantes"
-        return "✅ Cumplimiento óptimo"
-    df['Nota_Coach'] = df.apply(generar_nota, axis=1)
-
-    # 5. RESTAURACIÓN DE MÉTRICAS LEGACY (PARA SECCIÓN 5)
-    def calcular_cv_legacy(r):
-        valores = [r['N_Mins'], r['B_Mins'], r['R_Mins']]
-        if sum(valores) == 0: return 'NC'
-        if all(v > 0 for v in valores):
-            return round(np.std(valores) / np.mean(valores), 4)
-        return 'NC'
-
-    df['CV'] = df.apply(calcular_cv_legacy, axis=1)
-    df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
-    
-    # Forzar que si el total es 0, no sea NaN sino 0.0 para Matplotlib
-    df['N_Mins'] = df['N_Mins'].astype(float).fillna(0.0)
-    df['B_Mins'] = df['B_Mins'].astype(float).fillna(0.0)
-    df['R_Mins'] = df['R_Mins'].astype(float).fillna(0.0)
+    # CV Legacy para Sección 5
+    df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
 
     return df
     
