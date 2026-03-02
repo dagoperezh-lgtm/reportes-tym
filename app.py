@@ -905,12 +905,8 @@ with st.sidebar:
     st.title("Configuración")
     
     st.header("📂 Cargas Maestras")
-    # Histórico de semanas anteriores
     cargador_maestro_excel = st.file_uploader("📂 Sube el archivo histórico", type=["xlsx"])
-    
-    # Carga de la semana actual por Excel
     cargador_semana_excel = st.file_uploader("🏃 Sube Excel de la Semana (Real)", type=["xlsx"])
-    
     num_semana_procesar = st.text_input("Número de Semana (Ej: 08):", "08")
     
     st.divider()
@@ -931,11 +927,9 @@ with st.sidebar:
         'Trote_Hrs_Plan': p_t_h, 'Trote_Ses_Plan': p_t_s
     }
 
-    # Procesamiento de Planes (Individual > Global)
     df_plan_indiv = None
     if file_plan:
         df_temp = pd.read_excel(file_plan)
-        # Normalizar columna de identidad en el plan
         pos_id_p = ['Deportista', 'Nombre', 'Atleta']
         c_id_p = next((c for c in df_temp.columns if c in pos_id_p), None)
         if c_id_p:
@@ -944,94 +938,80 @@ with st.sidebar:
 
     ejecutar = st.button("🚀 PROCESAR JORNADA", use_container_width=True)
 
-# 2. CUERPO PRINCIPAL: RESULTADOS Y GESTIÓN
+# 2. PROCESAMIENTO
 if ejecutar:
     if cargador_maestro_excel and cargador_semana_excel:
-        # Carga directa del Excel semanal
-        df_semana_raw = pd.read_excel(cargador_semana_excel)
-        
-        # Ejecutar Motor de Adherencia (Nueva Sección 3B)
-        df_resultados = calcular_metricas_cumplimiento(df_semana_raw, df_plan_indiv, dict_plan_global)
-        
-        # Persistencia en sesión
-        st.session_state['df_resultados'] = df_resultados
-        st.session_state['procesado_ok'] = True
+        try:
+            df_semana_raw = pd.read_excel(cargador_semana_excel)
+            # Ejecutar Motor 3B
+            df_resultados = calcular_metricas_cumplimiento(df_semana_raw, df_plan_indiv, dict_plan_global)
+            st.session_state['df_resultados'] = df_resultados
+            st.session_state['procesado_ok'] = True
+        except Exception as e:
+            st.error(f"Error en el procesamiento: {e}")
     else:
-        st.error("Debes cargar tanto el Archivo Histórico como el Excel de la Semana.")
+        st.error("Faltan archivos obligatorios.")
 
-# VISUALIZACIÓN DE RESULTADOS
+# 3. VISUALIZACIÓN
 if st.session_state.get('procesado_ok'):
     df_res = st.session_state['df_resultados']
 
     st.header(f"📊 Análisis de Adherencia - Semana {num_semana_procesar}")
     
-    # KPIs Visuales Interpretables
+    # KPIs Visuales con manejo de errores
     m1, m2, m3 = st.columns(3)
-    avg_tpi = df_res['TPI_Global'].mean()
-    m1.metric("TPI Promedio Club", f"{avg_tpi:.1f}%")
-    m2.metric("Atletas en Óptimo", len(df_res[df_res['Estado_Cumplimiento'] == 'Óptimo']))
-    m3.metric("Atletas en Riesgo", len(df_res[df_res['Estado_Cumplimiento'] == 'Riesgo']))
+    if 'TPI_Global' in df_res.columns:
+        m1.metric("TPI Promedio Club", f"{df_res['TPI_Global'].mean():.1f}%")
+    if 'Estado_Cumplimiento' in df_res.columns:
+        m2.metric("Atletas en Óptimo", len(df_res[df_res['Estado_Cumplimiento'] == 'Óptimo']))
+        m3.metric("Atletas en Riesgo", len(df_res[df_res['Estado_Cumplimiento'] == 'Riesgo']))
 
-    # Tabla de Control Autoexplicativa
     st.subheader("📋 Tabla de Cumplimiento Detallado (TPI)")
-    st.info("La columna 'Nota_Coach' explica el motivo del estado de cumplimiento.")
     
-    cols_v = ['Deportista', 'TPI_Global', 'Estado_Cumplimiento', 'Nota_Coach', 'VCI_Global', 'SEI_Global']
-    st.dataframe(
-        df_res[cols_v].sort_values("TPI_Global", ascending=False).style.format("{:.1f}%", subset=['TPI_Global', 'VCI_Global', 'SEI_Global']), 
-        use_container_width=True
-    )
+    # --- FILTRO DINÁMICO DE COLUMNAS PARA EVITAR KEYERROR ---
+    cols_deseadas = ['Deportista', 'TPI_Global', 'Estado_Cumplimiento', 'Nota_Coach', 'VCI_Global', 'SEI_Global']
+    cols_presentes = [c for c in cols_deseadas if c in df_res.columns]
+    cols_formato = [c for c in ['TPI_Global', 'VCI_Global', 'SEI_Global'] if c in df_res.columns]
+
+    if cols_presentes:
+        st.dataframe(
+            df_res[cols_presentes].sort_values(cols_presentes[1] if len(cols_presentes)>1 else cols_presentes[0], ascending=False).style.format("{:.1f}%", subset=cols_formato), 
+            use_container_width=True
+        )
+    else:
+        st.warning("No se pudieron generar las columnas de cumplimiento. Revisa los nombres de las columnas en tu Excel semanal.")
 
     st.divider()
-
-    # SECCIÓN DE DESCARGAS (WORD Y EXCEL)
     st.subheader("📥 Descargar Entregables")
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button(
-            "📄 REPORTE WORD GRUPAL", 
-            generar_reporte_word_tym_completo(df_res, num_semana_procesar, "N/A", "N/A"), 
-            f"Reporte_Sem_{num_semana_procesar}.docx", 
-            use_container_width=True
-        )
+        st.download_button("📄 REPORTE WORD GRUPAL", generar_reporte_word_tym_completo(df_res, num_semana_procesar, "N/A", "N/A"), f"Reporte_Sem_{num_semana_procesar}.docx", use_container_width=True)
     with c2:
-        st.download_button(
-            "📊 EXCEL HISTÓRICO ACTUALIZADO", 
-            crear_excel_actualizado(cargador_maestro_excel, df_res, num_semana_procesar), 
-            f"Historico_S{num_semana_procesar}.xlsx", 
-            use_container_width=True
-        )
+        st.download_button("📊 EXCEL HISTÓRICO ACTUALIZADO", crear_excel_actualizado(cargador_maestro_excel, df_res, num_semana_procesar), f"Historico_S{num_semana_procesar}.xlsx", use_container_width=True)
 
-    # GENERACIÓN MASIVA ZIP (RESTAURADA)
     st.divider()
-    st.subheader("📦 Generación Masiva de Reportes Individuales (ZIP)")
+    st.subheader("📦 Reportes Individuales (ZIP)")
     
-    # Carga de históricos para el ZIP narrativo
-    h_t = pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object)
-    h_n = pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object)
-    h_c = pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object)
-    h_r = pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
-    dict_h_ref = {"Tiempo Total": h_t, "Natación": h_n, "Ciclismo": h_c, "Trote": h_r}
-    
-    # Filtrar solo atletas con minutos registrados para no generar archivos vacíos
-    df_activos = df_res[df_res['T_Mins'] > 0]
-    atletas_list = df_activos['Deportista'].tolist()
-    
-    seleccion = st.multiselect("Seleccionar atletas para el ZIP (por defecto todos los activos):", atletas_list, default=atletas_list)
-    
-    if seleccion:
-        if st.button("⚙️ GENERAR ARCHIVOS ZIP"):
+    # Preparación de histórico
+    try:
+        dict_h_ref = {
+            "Tiempo Total": pd.read_excel(cargador_maestro_excel, sheet_name="Tiempo Total", dtype=object),
+            "Natación": pd.read_excel(cargador_maestro_excel, sheet_name="Natación", dtype=object),
+            "Ciclismo": pd.read_excel(cargador_maestro_excel, sheet_name="Ciclismo", dtype=object),
+            "Trote": pd.read_excel(cargador_maestro_excel, sheet_name="Trote", dtype=object)
+        }
+        
+        atletas_list = df_res['Deportista'].tolist() if 'Deportista' in df_res.columns else []
+        seleccion = st.multiselect("Seleccionar atletas:", atletas_list, default=atletas_list)
+        
+        if seleccion and st.button("⚙️ GENERAR ARCHIVOS ZIP"):
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w") as zf:
                 for atleta in seleccion:
-                    # El motor narrativo ahora usará los datos de adherencia calculados
                     r_indiv = generar_reporte_narrativo_individual(atleta, df_res, dict_h_ref, num_semana_procesar)
                     if r_indiv:
                         zf.writestr(f"Reporte_{clean_string(atleta)}.docx", r_indiv.getvalue())
             
-            st.download_button(
-                label="⬇️ DESCARGAR ZIP GENERADO", 
-                data=zip_buffer.getvalue(), 
-                file_name=f"Individuales_Sem_{num_semana_procesar}.zip",
-                mime="application/zip"
-            )
+            st.download_button("⬇️ DESCARGAR ZIP", zip_buffer.getvalue(), f"Individuales_S{num_semana_procesar}.zip")
+    except Exception as e:
+        st.error(f"Error al preparar el ZIP: {e}. Verifica que el Excel histórico tenga las pestañas: Tiempo Total, Natación, Ciclismo, Trote.")
