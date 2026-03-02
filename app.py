@@ -311,25 +311,35 @@ def clasificar_cumplimiento(valor):
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
     """
     Sistema robusto de métricas de cumplimiento para triatlón.
-    Calcula VCI (Volumen), SEI (Sesiones) y TPI (Ponderación 40/60).
     Mantiene integridad numérica y jerarquía de carga (Individual > Global).
     """
     df = df_reales.copy()
     
-    # Mapeo de columnas de entrada según tu Sección 4
+    # --- BLINDAJE CONTRA KEYERROR: DEPORTISTA ---
+    # Buscamos posibles nombres de la columna de identidad
+    posibles_nombres = ['Deportista', 'Nombre', 'Atleta', 'Athlete']
+    col_identidad = next((c for c in df.columns if c in posibles_nombres), None)
+    
+    if col_identidad is None:
+        # Si no encuentra ninguna, forzamos la primera columna como 'Deportista'
+        df.rename(columns={df.columns[0]: 'Deportista'}, inplace=True)
+    else:
+        df.rename(columns={col_identidad: 'Deportista'}, inplace=True)
+    # --------------------------------------------
+
     mapping = {
         'Natacion': {'real_h': 'N_Mins', 'real_s': 'N_Ses'},
         'Ciclismo': {'real_h': 'B_Mins', 'real_s': 'B_Ses'},
         'Trote':    {'real_h': 'R_Mins', 'real_s': 'R_Ses'}
     }
 
-    # 1. ROBUSTEZ: Asegurar que los datos reales existan y no sean NaN
+    # 1. ROBUSTEZ: Asegurar que los datos reales existan
     columnas_reales = ['N_Mins', 'B_Mins', 'R_Mins', 'N_Ses', 'B_Ses', 'R_Ses']
     for col in columnas_reales:
         if col not in df.columns:
             df[col] = 0
     
-    # 🛡️ Blindaje: Si hay minutos pero 0 sesiones, asimilamos al menos 1 sesión
+    # Blindaje de sesiones: si hay minutos pero no sesiones, asumimos 1
     df['N_Ses'] = df.apply(lambda r: 1 if r['N_Mins'] > 0 and r['N_Ses'] == 0 else r['N_Ses'], axis=1)
     df['B_Ses'] = df.apply(lambda r: 1 if r['B_Mins'] > 0 and r['B_Ses'] == 0 else r['B_Ses'], axis=1)
     df['R_Ses'] = df.apply(lambda r: 1 if r['R_Mins'] > 0 and r['R_Ses'] == 0 else r['R_Ses'], axis=1)
@@ -342,29 +352,25 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
         s_plan_col = f"{disc}_Ses_Plan"
         
         def extraer_plan(atleta, col_name, val_global):
-            # Si existe plan individual y el atleta está en él, tiene prioridad
-            if df_plan_indiv is not None and atleta in df_plan_indiv['Deportista'].values:
-                val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
-                return val if val > 0 else np.nan
-            # Si no, se usa el valor global definido en la interfaz
+            if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
+                if atleta in df_plan_indiv['Deportista'].values:
+                    val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, col_name].values[0]
+                    return val if val > 0 else np.nan
             return val_global if val_global > 0 else np.nan
 
         df[h_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
         df[s_plan_col] = df.apply(lambda r: extraer_plan(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
 
-    # 3. CÁLCULOS POR DISCIPLINA (VCI, SEI, TPI)
+    # 3. CÁLCULOS POR DISCIPLINA
     for d, cols in mapping.items():
-        # VCI (Volumen) y SEI (Sesiones) con protección contra división por cero
         df[f'VCI_{d}'] = df.apply(lambda r: (r[cols['real_h']] / (r[f'{d}_Hrs_Plan'] * 60)) * 100 if r[f'{d}_Hrs_Plan'] > 0 else np.nan, axis=1)
         df[f'SEI_{d}'] = df.apply(lambda r: (r[cols['real_s']] / r[f'{d}_Ses_Plan']) * 100 if r[f'{d}_Ses_Plan'] > 0 else np.nan, axis=1)
         
-        # TPI (Ponderación 40% Volumen / 60% Constancia)
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}'].fillna(0)) + (0.6 * df[f'SEI_{d}'].fillna(0))
-        
-        # Clasificación por disciplina
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df[f'Estado_{d}'] = df[f'TPI_{d}'].apply(clasificar_cumplimiento)
 
-    # 4. CÁLCULOS GLOBALES SEMANALES
+    # 4. CÁLCULOS GLOBALES
     hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1, min_count=1)
     ses_p_tot = df[['Natacion_Ses_Plan', 'Ciclismo_Ses_Plan', 'Trote_Ses_Plan']].sum(axis=1, min_count=1)
     mins_r_tot = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
@@ -373,16 +379,16 @@ def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_glob
     df['VCI_Global'] = (mins_r_tot / (hrs_p_tot * 60)) * 100
     df['SEI_Global'] = (ses_r_tot / ses_p_tot) * 100
     df['TPI_Global'] = (0.4 * df['VCI_Global'].fillna(0)) + (0.6 * df['SEI_Global'].fillna(0))
-    
-    # Índice de Balance (Desviación estándar de cumplimiento entre las 3 disciplinas)
     df['Indice_Balance'] = df[['TPI_Natacion', 'TPI_Ciclismo', 'TPI_Trote']].std(axis=1)
-
-    # Limpieza final de infinitos y clasificación global
+    
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(clasificar_cumplimiento)
 
-    return df
+    # 🛡️ IMPORTANTE: Devolvemos 'T_Mins' para compatibilidad con el resto del código
+    if 'T_Mins' not in df.columns:
+        df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
 
+    return df
 # *****************************************************************************
 # --- 4. PARSERS DE ENTRADA (BLINDADO - NO SINTETIZAR) ---
 # *****************************************************************************
