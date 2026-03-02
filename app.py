@@ -300,73 +300,84 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
 # --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
 # *****************************************************************************
 
-def time_to_mins_robust(value):
-    """Convierte formatos HH:MM:SS a minutos decimales para cálculos."""
-    if pd.isna(value) or value == 0: return 0.0
+def convertir_a_minutos_numericos(valor):
+    """Garantiza que cualquier formato (HH:MM:SS o número) sea un número funcional (minutos)."""
+    if pd.isna(valor) or valor == 0: return 0.0
     if isinstance(value, (int, float)): return float(value)
     try:
-        str_val = str(value).strip()
-        if ':' in str_val:
-            parts = str_val.split(':')
-            if len(parts) == 3: return int(parts[0])*60 + int(parts[1]) + int(parts[2])/60
-            if len(parts) == 2: return int(parts[0]) + int(parts[1])/60
-        return float(str_val)
-    except: return 0.0
+        s = str(valor).strip()
+        if ':' in s:
+            p = s.split(':')
+            if len(p) == 3: # HH:MM:SS
+                return int(p[0])*60 + int(p[1]) + int(p[2])/60
+            if len(p) == 2: # MM:SS
+                return int(p[0]) + int(p[1])/60
+        return float(s)
+    except:
+        return 0.0
 
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
+    """
+    Motor de Adherencia: Transforma texto de Excel en números aritméticamente funcionales.
+    Mantiene la jerarquía: Plan Individual > Plan Global.
+    """
     df = df_reales.copy()
     
-    # 1. SINCRONIZACIÓN DE NOMBRES DE COLUMNAS (Mapeo de tu Excel Sem 08)
-    # Traducimos los nombres de tus columnas al lenguaje interno del motor
-    mapeo = {'Natación': 'N_Mins', 'Bicicleta': 'B_Mins', 'Trote': 'R_Mins'}
-    df.rename(columns=mapeo, inplace=True)
-    
-    # Asegurar que la columna de identidad sea 'Deportista'
-    for c in ['Nombre', 'Atleta', 'Athlete']:
-        if c in df.columns: df.rename(columns={c: 'Deportista'}, inplace=True)
+    # 1. SINCRONIZACIÓN: Mapeamos los nombres de tu Excel 'Sem 08' al motor interno
+    df.rename(columns={
+        'Natación': 'N_Mins', 
+        'Bicicleta': 'B_Mins', 
+        'Trote': 'R_Mins',
+        'Nombre': 'Deportista',
+        'Atleta': 'Deportista'
+    }, inplace=True)
 
-    # 2. CONVERSIÓN DE TIEMPOS A NÚMEROS (Evita error en gráfico de torta)
-    for col in ['N_Mins', 'B_Mins', 'R_Mins']:
+    # 2. ARITMÉTICA PURA: Convertimos todo a minutos (Números)
+    cols_calc = ['N_Mins', 'B_Mins', 'R_Mins']
+    for col in cols_calc:
         if col in df.columns:
-            df[col] = df[col].apply(time_to_mins_robust)
+            df[col] = df[col].apply(convertir_a_minutos_numericos)
         else:
             df[col] = 0.0
+    
+    # Asegurar que T_Mins sea la suma numérica para el Word
+    df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
 
-    # 3. LÓGICA DE CASCADA: Plan Individual > Plan Global
+    # 3. LÓGICA DE CASCADA (Tu regla: Individual > Global)
     disciplinas = {'Natacion': 'N_Mins', 'Ciclismo': 'B_Mins', 'Trote': 'R_Mins'}
     for d, real_c in disciplinas.items():
-        h_plan_col = f"{d}_Hrs_Plan"
-        s_plan_col = f"{d}_Ses_Plan"
+        h_plan, s_plan = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
         
-        def obtener_meta(atleta, meta_col, valor_global):
-            # Si hay plan individual y el atleta existe en él
+        def obtener_meta(atleta, meta_col, val_global):
+            # Prioridad: Plan Individual (si existe el archivo y el nombre del atleta)
             if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
                 if atleta in df_plan_indiv['Deportista'].values:
-                    val = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, meta_col].values[0]
-                    return val if (pd.notna(val) and val > 0) else valor_global
-            # Si no, aplicar Plan Global (el que ingresas en el sidebar)
-            return valor_global
+                    v = df_plan_indiv.loc[df_plan_indiv['Deportista'] == atleta, meta_col].values[0]
+                    return v if (pd.notna(v) and v > 0) else val_global
+            # Fallback: Plan Global (manual en el sidebar)
+            return val_global
 
-        df[h_plan_col] = df.apply(lambda r: obtener_meta(r['Deportista'], h_plan_col, dict_plan_global.get(h_plan_col, 0)), axis=1)
-        df[s_plan_col] = df.apply(lambda r: obtener_meta(r['Deportista'], s_plan_col, dict_plan_global.get(s_plan_col, 0)), axis=1)
+        df[h_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
+        df[s_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
 
-        # 4. CÁLCULOS TPI (40% Volumen / 60% Sesiones)
-        df[f'VCI_{d}'] = df.apply(lambda r: (r[real_c] / (r[h_plan_col] * 60)) * 100 if r[h_plan_col] > 0 else 0, axis=1)
-        # Sesiones: 1 si registró tiempo
+        # 4. CÁLCULOS DE CUMPLIMIENTO (TPI)
+        df[f'VCI_{d}'] = df.apply(lambda r: (r[real_c] / (r[h_plan] * 60)) * 100 if r[h_plan] > 0 else 0, axis=1)
+        # Sesiones: 1 si hay tiempo registrado
         s_real = real_c.replace('_Mins', '_Ses')
         df[s_real] = df[real_c].apply(lambda x: 1 if x > 0 else 0)
-        df[f'SEI_{d}'] = df.apply(lambda r: (r[s_real] / r[s_plan_col]) * 100 if r[s_plan_col] > 0 else 0, axis=1)
+        df[f'SEI_{d}'] = df.apply(lambda r: (r[s_real] / r[s_plan]) * 100 if r[s_plan] > 0 else 0, axis=1)
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}']) + (0.6 * df[f'SEI_{d}'])
 
-    # 5. INTEGRIDAD PARA REPORTE WORD (Sección 5)
-    hrs_p_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
-    df['TPI_Global'] = df.apply(lambda r: (r['T_Mins'] / (hrs_p_tot.loc[r.name]*60)) * 100 if hrs_p_tot.loc[r.name] > 0 else 0, axis=1)
+    # 5. RESULTADOS GLOBALES Y COMPATIBILIDAD CON SECCIÓN 5
+    hrs_p_total = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
+    df['TPI_Global'] = df.apply(lambda r: (r['T_Mins'] / (hrs_p_total.loc[r.name]*60)) * 100 if hrs_p_total.loc[r.name] > 0 else 0, axis=1)
     
-    # Clasificación y CV (Legacy para el Word)
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else ("Parcial" if v >= 85 else "Riesgo"))
+    
+    # Suministramos el CV que el Word (Sección 5) exige
     df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
-    df['Nota_Coach'] = df.apply(lambda r: "⚠️ Sin actividad" if r['TPI_Global'] == 0 else "✅ Procesado", axis=1)
+    
+    df['Nota_Coach'] = df.apply(lambda r: "⚠️ Sin actividad" if r['T_Mins'] == 0 else "✅ Datos Aritméticos Listos", axis=1)
 
     return df
     
