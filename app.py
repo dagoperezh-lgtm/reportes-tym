@@ -300,84 +300,83 @@ def generar_comentario(datos_de_fila, nombre_categoria, rank_posicion):
 # --- 3B. LÓGICA DE NEGOCIO Y GOBERNANZA DE DATOS (ADHERENCIA) ---
 # *****************************************************************************
 
-def asegurar_aritmetica_funcional(valor):
+def asegurar_minutos_reales(valor):
     """
-    PRUEBA BÁSICA DE INGENIERÍA:
-    - Si es número (int/float), se mantiene intacto (ya es minutos).
-    - Solo si es texto o formato tiempo, se aplica la conversión.
+    REGLA DE INGENIERÍA:
+    - Si es número (minutos ya calculados), se mantiene.
+    - Si es texto o tiempo, se transforma.
     """
     if pd.isna(valor) or valor == 0: return 0.0
-    
-    # 🛡️ REGLA ORO: Si ya es un número funcional, no aplicar transformación.
     if isinstance(valor, (int, float)): 
-        # Si es un número muy pequeño (menor a 1), es una fracción de día de Excel
-        if valor < 1.0: return float(round(valor * 1440))
-        # Si es un número mayor, ya son los minutos reales
-        return float(valor)
-        
-    # Si llega como texto "HH:MM:SS", usamos tu lógica robusta de la Sección 2
+        # Si el número es < 1, es fracción de día de Excel. Si es > 1, son minutos.
+        return float(valor * 1440) if valor < 1.0 else float(valor)
     return to_mins(valor)
 
 def calcular_metricas_cumplimiento(df_reales, df_plan_indiv=None, dict_plan_global=None):
-    """
-    Motor de Adherencia TYM: Aduana de Datos y Regla de Cascada.
-    Garantiza que la Sección 5 (Reportes) reciba números sumables.
-    """
     df = df_reales.copy()
     
-    # 1. LIMPIEZA DE COLUMNAS (Crucial para evitar el error de "Natación" vs " Natación")
-    df.columns = [str(c).strip() for c in df.columns]
+    # 1. LIMPIEZA AGRESIVA DE COLUMNAS (Evita fallos por espacios o tildes)
+    df.columns = [clean_string(c) for c in df.columns]
     
-    # 2. SINCRONIZACIÓN DE IDENTIDAD
-    mapeo_identidad = {'Natación': 'N_Mins', 'Bicicleta': 'B_Mins', 'Trote': 'R_Mins'}
+    # 2. MAPEO DE IDENTIDAD (Sincronización con nombres normalizados)
+    # Aquí buscamos el concepto, no solo el nombre exacto.
+    mapeo_identidad = {
+        'NATACION': 'N_Mins', 
+        'BICICLETA': 'B_Mins', 
+        'CICLISMO': 'B_Mins',
+        'TROTE': 'R_Mins',
+        'RUNNING': 'R_Mins'
+    }
     df.rename(columns=mapeo_identidad, inplace=True)
+    
+    # Identificar al deportista
     for c in df.columns:
-        if c.upper() in ['NOMBRE', 'ATLETA', 'DEPORTISTA']: df.rename(columns={c: 'Deportista'}, inplace=True)
+        if c in ['NOMBRE', 'ATLETA', 'DEPORTISTA']:
+            df.rename(columns={c: 'Deportista'}, inplace=True)
 
-    # 3. PROCESAMIENTO ARITMÉTICO (Prueba Texto vs Número)
+    # 3. PROCESAMIENTO ARITMÉTICO (Tu prueba básica)
     for col in ['N_Mins', 'B_Mins', 'R_Mins']:
         if col in df.columns:
-            df[col] = df[col].apply(asegurar_aritmetica_funcional)
+            df[col] = df[col].apply(asegurar_minutos_reales)
         else:
             df[col] = 0.0
     
-    # Definimos T_Mins para que el gráfico de la Sección 5 tenga datos reales
+    # Dato vital para que el gráfico de la Sección 5 NO sea cero
     df['T_Mins'] = df['N_Mins'] + df['B_Mins'] + df['R_Mins']
 
-    # 4. LÓGICA DE CASCADA (REGLA: Plan Individual > Plan Global)
+    # 4. LÓGICA DE CASCADA (REGLA: Individual > Global)
     for d in ['Natacion', 'Ciclismo', 'Trote']:
         h_plan, s_plan = f"{d}_Hrs_Plan", f"{d}_Ses_Plan"
         col_real = 'N_Mins' if d=='Natacion' else 'B_Mins' if d=='Ciclismo' else 'R_Mins'
         
-        def obtener_meta(atl, meta_col, v_glob):
+        def obtener_meta(atl, m_col, v_glob):
             if df_plan_indiv is not None and 'Deportista' in df_plan_indiv.columns:
                 match = df_plan_indiv[df_plan_indiv['Deportista'].apply(clean_string) == clean_string(atl)]
                 if not match.empty:
-                    v = match[meta_col].values[0] if meta_col in match.columns else 0
+                    v = match[m_col].values[0] if m_col in match.columns else 0
                     return v if (pd.notna(v) and v > 0) else v_glob
             return v_glob
 
         df[h_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), h_plan, dict_plan_global.get(h_plan, 0)), axis=1)
         df[s_plan] = df.apply(lambda r: obtener_meta(r.get('Deportista'), s_plan, dict_plan_global.get(s_plan, 0)), axis=1)
 
-        # KPIs de Adherencia (TPI)
+        # KPIs Adherencia
         df[f'VCI_{d}'] = (df[col_real] / (df[h_plan] * 60)) * 100
-        df[f'SEI_{d}'] = (df[col_real].apply(lambda x: 1 if x>0 else 0) / df[s_plan]) * 100
+        df[f'SEI_{d}'] = (df[col_real].apply(lambda x: 1 if x > 0 else 0) / df[s_plan]) * 100
         df[f'TPI_{d}'] = (0.4 * df[f'VCI_{d}'].fillna(0)) + (0.6 * df[f'SEI_{d}'].fillna(0))
 
-    # 5. RESULTADOS PARA SECCIÓN 5 (Reporte Word GOLD)
-    hrs_plan_club = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
-    df['TPI_Global'] = (df['T_Mins'] / (hrs_plan_club * 60)) * 100
+    # 5. RESULTADOS PARA REPORTES (Sección 5 y 7)
+    hrs_tot = df[['Natacion_Hrs_Plan', 'Ciclismo_Hrs_Plan', 'Trote_Hrs_Plan']].sum(axis=1)
+    df['TPI_Global'] = (df['T_Mins'] / (hrs_tot * 60)) * 100
     df['Estado_Cumplimiento'] = df['TPI_Global'].apply(lambda v: "Óptimo" if v >= 95 else "Riesgo")
     df['CV'] = df.apply(lambda r: np.std([r['N_Mins'], r['B_Mins'], r['R_Mins']])/np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) if np.mean([r['N_Mins'], r['B_Mins'], r['R_Mins']]) > 0 else 'NC', axis=1)
     
-    # Columnas de visualización (Compatibilidad con Reporte Original)
-    for t_col in ['Tiempo Total', 'Natación', 'Bicicleta', 'Trote']:
-        ref = 'T_Mins' if t_col == 'Tiempo Total' else ('N_Mins' if t_col == 'Natación' else ('B_Mins' if t_col == 'Bicicleta' else 'R_Mins'))
-        df[t_col] = df[ref].apply(to_hhmmss_display)
+    # Restaurar nombres para visualización
+    df['Tiempo Total'] = df['T_Mins'].apply(to_hhmmss_display)
+    df['Natación'] = df['N_Mins'].apply(to_hhmmss_display)
+    df['Bicicleta'] = df['B_Mins'].apply(to_hhmmss_display)
+    df['Trote'] = df['R_Mins'].apply(to_hhmmss_display)
     
-    df['Nota_Coach'] = df.apply(lambda r: "⚠️ Sin actividad" if r['T_Mins'] == 0 else "✅ Aritmética TYM Validada", axis=1)
-
     return df
     
 # *****************************************************************************
